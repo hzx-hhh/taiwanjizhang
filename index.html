@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>台湾旅行智能记账小助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  </head>
+
+  <body class="bg-gray-100 text-gray-900 antialiased">
+    <div id="app" class="min-h-dvh pb-24">
+      <!-- 顶部标题 -->
+      <header class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur">
+        <div class="mx-auto max-w-md px-4 py-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <h1 class="text-base font-semibold tracking-tight">台湾旅行智能记账小助手</h1>
+              <p class="mt-0.5 text-xs text-gray-500">
+                智能录入 · 自动分类 · 三币种实时换算
+              </p>
+            </div>
+            <button
+              class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+              type="button"
+              @click="confirmClearAll"
+              title="清空所有记录"
+            >
+              清空
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="mx-auto max-w-md px-4">
+        <!-- 输入面板 -->
+        <section class="mt-4">
+          <div class="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-black/5">
+            <label class="sr-only" for="smartInput">智能录入</label>
+            <div class="flex items-center gap-2">
+              <input
+                id="smartInput"
+                v-model="inputText"
+                @keydown.enter.prevent="addFromInput(selectedCurrency)"
+                class="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none ring-0 placeholder:text-gray-400 focus:border-gray-300 focus:bg-white"
+                type="text"
+                inputmode="text"
+                placeholder="例如：阿宗面线 75，高铁票 1500"
+              />
+              <div class="shrink-0 flex items-center rounded-xl bg-gray-50 p-1 ring-1 ring-gray-200">
+                <button
+                  class="rounded-lg px-3 py-2 text-sm font-medium tabular-nums active:opacity-80 disabled:opacity-50"
+                  :class="selectedCurrency==='TWD' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'"
+                  type="button"
+                  :disabled="!inputText.trim()"
+                  @click="addFromInput('TWD')"
+                  title="以新台币记录"
+                >
+                  NT$
+                </button>
+                <button
+                  class="rounded-lg px-3 py-2 text-sm font-medium tabular-nums active:opacity-80 disabled:opacity-50"
+                  :class="selectedCurrency==='SGD' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'"
+                  type="button"
+                  :disabled="!inputText.trim()"
+                  @click="addFromInput('SGD')"
+                  title="以新币记录"
+                >
+                  S$
+                </button>
+                <button
+                  class="rounded-lg px-3 py-2 text-sm font-medium tabular-nums active:opacity-80 disabled:opacity-50"
+                  :class="selectedCurrency==='CNY' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'"
+                  type="button"
+                  :disabled="!inputText.trim()"
+                  @click="addFromInput('CNY')"
+                  title="以人民币记录"
+                >
+                  ¥
+                </button>
+              </div>
+            </div>
+            <p class="mt-2 text-xs text-gray-500">
+              提示：直接输入“消费内容 + 金额”，例如“夜市奶茶 60”。
+            </p>
+            <p v-if="errorMsg" class="mt-2 text-xs text-red-600">
+              {{ errorMsg }}
+            </p>
+          </div>
+        </section>
+
+        <!-- 总计看板 -->
+        <section class="mt-4">
+          <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-xs text-gray-500">总支出</p>
+                <p class="mt-1 text-3xl font-semibold tabular-nums tracking-tight">
+                  ¥ {{ formatMoney(totalCny, 2) }}
+                </p>
+              </div>
+              <div class="text-right">
+                <p class="text-xs text-gray-500">折合</p>
+                <p class="mt-1 text-sm tabular-nums text-gray-700">
+                  NT$ {{ formatMoney(totalTwd, 2) }}
+                </p>
+                <p class="mt-0.5 text-sm tabular-nums text-gray-700">
+                  SGD {{ formatMoney(totalSgd, 2) }}
+                </p>
+              </div>
+            </div>
+
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <div class="rounded-xl bg-gray-50 px-3 py-2">
+                <p class="text-[11px] text-gray-500">汇率</p>
+                <p class="mt-1 text-xs text-gray-700">
+                  1 SGD = <span class="tabular-nums">{{ rates.sgdRate }}</span> TWD
+                </p>
+                <p class="mt-0.5 text-xs text-gray-700">
+                  1 CNY = <span class="tabular-nums">{{ rates.cnyRate }}</span> TWD
+                </p>
+              </div>
+              <div class="rounded-xl bg-gray-50 px-3 py-2">
+                <p class="text-[11px] text-gray-500">记录数</p>
+                <p class="mt-1 text-xs text-gray-700">
+                  <span class="tabular-nums">{{ records.length }}</span> 条
+                </p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  数据已自动保存在本机浏览器
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 分类明细 -->
+        <section class="mt-4">
+          <div class="mb-2 px-1">
+            <h2 class="text-sm font-semibold text-gray-800">分类明细</h2>
+            <p class="mt-0.5 text-xs text-gray-500">按大类分组展示（点击可展开/收起）</p>
+          </div>
+
+          <div class="space-y-3">
+            <div
+              v-for="cat in categories"
+              :key="cat.key"
+              class="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5"
+            >
+              <button
+                type="button"
+                class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left active:bg-gray-50"
+                @click="toggleCategory(cat.key)"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="text-lg">{{ cat.emoji }}</span>
+                  <div>
+                    <p class="text-sm font-medium text-gray-900">{{ cat.label }}</p>
+                    <p class="mt-0.5 text-xs text-gray-500">
+                      <span class="tabular-nums">{{ grouped[cat.key]?.items?.length ?? 0 }}</span> 条
+                    </p>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <p class="text-sm font-semibold tabular-nums">
+                    ¥ {{ formatMoney((grouped[cat.key]?.sumTwd ?? 0) / rates.cnyRate, 2) }}
+                  </p>
+                  <p class="mt-0.5 text-xs text-gray-500">
+                    {{ expanded.has(cat.key) ? "收起" : "展开" }}
+                  </p>
+                </div>
+              </button>
+
+              <div v-if="expanded.has(cat.key)" class="border-t border-gray-100">
+                <div v-if="(grouped[cat.key]?.items?.length ?? 0) === 0" class="px-4 py-3 text-xs text-gray-500">
+                  暂无记录
+                </div>
+                <ul v-else class="divide-y divide-gray-100">
+                  <li
+                    v-for="item in grouped[cat.key].items"
+                    :key="item.id"
+                    class="flex items-start justify-between gap-3 px-4 py-3"
+                  >
+                    <div class="min-w-0">
+                      <p class="truncate text-sm text-gray-900">{{ item.detail }}</p>
+                      <p class="mt-0.5 text-xs text-gray-500">
+                        {{ formatDate(item.ts) }}
+                      </p>
+                    </div>
+                    <div class="shrink-0 text-right">
+                      <p class="text-sm font-medium tabular-nums">
+                        {{ currencySymbol(item.currency) }} {{ formatMoney(item.amountOriginal, currencyDigits(item.currency)) }}
+                      </p>
+                      <p class="mt-0.5 text-[11px] tabular-nums text-gray-500">
+                        约 NT$ {{ formatMoney(getAmountTwd(item), 2) }} · SGD
+                        {{ formatMoney(getAmountTwd(item) / rates.sgdRate, 2) }} · ¥
+                        {{ formatMoney(getAmountTwd(item) / rates.cnyRate, 2) }}
+                      </p>
+                      <div class="mt-2 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 active:opacity-80"
+                          @click.stop="openEdit(item)"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 active:opacity-80"
+                          @click.stop="removeRecord(item.id)"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 底部安全区占位 -->
+        <div class="h-10"></div>
+      </main>
+
+      <!-- 轻提示 -->
+      <div
+        v-if="toast"
+        class="pointer-events-none fixed bottom-6 left-1/2 z-30 w-[calc(100%-2rem)] max-w-md -translate-x-1/2"
+      >
+        <div class="rounded-xl bg-gray-900/90 px-4 py-3 text-center text-sm text-white shadow-lg backdrop-blur">
+          {{ toast }}
+        </div>
+      </div>
+
+      <!-- 编辑/删除：底部弹层 -->
+      <div v-if="editOpen" class="fixed inset-0 z-40">
+        <button
+          type="button"
+          class="absolute inset-0 h-full w-full bg-black/30"
+          @click="closeEdit"
+          aria-label="关闭"
+        ></button>
+        <div class="pointer-events-none absolute inset-x-0 bottom-0">
+          <div class="pointer-events-auto mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">编辑记录</p>
+                <p class="mt-0.5 text-xs text-gray-500">修改后会自动保存</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeEdit"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-3 space-y-3">
+              <div>
+                <label class="text-xs text-gray-600">消费详情</label>
+                <input
+                  v-model="editDetail"
+                  type="text"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  placeholder="例如：机票 / 奶茶 / 高铁票"
+                />
+              </div>
+
+              <div class="grid grid-cols-3 gap-2">
+                <div class="col-span-2">
+                  <label class="text-xs text-gray-600">金额</label>
+                  <input
+                    v-model="editAmount"
+                    type="number"
+                    inputmode="decimal"
+                    class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                    placeholder="例如：870"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs text-gray-600">币种</label>
+                  <select
+                    v-model="editCurrency"
+                    class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  >
+                    <option value="TWD">TWD</option>
+                    <option value="SGD">SGD</option>
+                    <option value="CNY">CNY</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs text-gray-600">分类</label>
+                <select
+                  v-model="editCategory"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                >
+                  <option v-for="c in categories" :key="c.key" :value="c.key">
+                    {{ c.emoji }} {{ c.label }}
+                  </option>
+                </select>
+              </div>
+
+              <p v-if="editError" class="text-xs text-red-600">{{ editError }}</p>
+
+              <div class="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 active:opacity-80"
+                  @click="closeEdit"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm active:opacity-90"
+                  @click="saveEdit"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, ref, computed, watch, onMounted } = Vue;
+
+      createApp({
+        setup() {
+          // ===== 配置（按需求写死在代码中） =====
+          const rates = ref({
+            sgdRate: 24.71, // 1 SGD = 24.71 TWD
+            cnyRate: 4.64,  // 1 CNY = 4.64 TWD
+          });
+
+          const categories = [
+            { key: "food", label: "餐饮", emoji: "🍜" },
+            { key: "transport", label: "交通", emoji: "🚄" },
+            { key: "hotel", label: "住宿", emoji: "🏨" },
+            { key: "ticket", label: "门票/活动", emoji: "🎟️" },
+            { key: "shopping", label: "伴手礼/购物", emoji: "🛍️" },
+            { key: "other", label: "其他", emoji: "💡" },
+          ];
+
+          // ===== 关键词分类规则 =====
+          const keywordRules = [
+            {
+              key: "food",
+              keywords: ["面线", "夜市", "吃", "饭", "奶茶", "饮料", "早餐", "午餐", "晚餐", "拉面", "火锅", "小吃", "咖啡", "茶"],
+            },
+            {
+              key: "transport",
+              keywords: ["捷运", "高铁", "车", "公交", "公车", "计程车", "出租车", "打车", "uber", "火车", "台铁", "船", "机票", "机场"],
+            },
+            {
+              key: "hotel",
+              keywords: ["酒店", "旅馆", "民宿", "住宿", "饭店", "hotel", "airbnb"],
+            },
+            {
+              key: "ticket",
+              keywords: ["门票", "票", "展", "博物馆", "动物园", "缆车", "温泉", "演唱会", "活动", "体验", "景点"],
+            },
+            {
+              key: "shopping",
+              keywords: ["家乐福", "凤梨酥", "伴手礼", "购物", "买", "药妆", "屈臣氏", "康是美", "免税", "特产", "纪念品"],
+            },
+          ];
+
+          // ===== 状态 =====
+          const STORAGE_KEY = "tw_travel_expenses_v1";
+          const records = ref([]);
+          const inputText = ref("");
+          const errorMsg = ref("");
+          const toast = ref("");
+          let toastTimer = null;
+          const selectedCurrency = ref("TWD"); // 默认以新台币记录
+
+          const expanded = ref(new Set(categories.map((c) => c.key))); // 默认全展开
+
+          // 编辑弹层
+          const editOpen = ref(false);
+          const editingId = ref(null);
+          const editDetail = ref("");
+          const editAmount = ref("");
+          const editCurrency = ref("TWD");
+          const editCategory = ref("other");
+          const editError = ref("");
+
+          function showToast(msg) {
+            toast.value = msg;
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => (toast.value = ""), 1600);
+          }
+
+          function safeParseJSON(str) {
+            try {
+              return JSON.parse(str);
+            } catch {
+              return null;
+            }
+          }
+
+          function loadFromStorage() {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            const data = raw ? safeParseJSON(raw) : null;
+            if (Array.isArray(data)) records.value = data.map(normalizeLegacyRecord);
+          }
+
+          function saveToStorage() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(records.value));
+          }
+
+          function formatMoney(n, digits = 0) {
+            const num = Number(n || 0);
+            return num.toLocaleString("zh-Hans", {
+              minimumFractionDigits: digits,
+              maximumFractionDigits: digits,
+            });
+          }
+
+          function currencySymbol(c) {
+            if (c === "TWD") return "NT$";
+            if (c === "SGD") return "S$";
+            if (c === "CNY") return "¥";
+            return "";
+          }
+
+          function currencyDigits(c) {
+            if (c === "TWD") return 0;
+            return 2;
+          }
+
+          function roundTo(n, digits = 2) {
+            const p = Math.pow(10, digits);
+            return Math.round((Number(n) + Number.EPSILON) * p) / p;
+          }
+
+          function normalizeLegacyRecord(r) {
+            // 兼容旧数据：如果没有币种信息，则视为 TWD
+            const currency = r.currency || "TWD";
+            const amountOriginal =
+              typeof r.amountOriginal === "number"
+                ? r.amountOriginal
+                : typeof r.amountTwd === "number"
+                  ? r.amountTwd
+                  : Number(r.amountTwd || 0);
+            return { ...r, currency, amountOriginal };
+          }
+
+          function getAmountTwd(r) {
+            const currency = r.currency || "TWD";
+            const amountOriginal = Number(r.amountOriginal ?? r.amountTwd ?? 0);
+            if (currency === "SGD") return roundTo(amountOriginal * rates.value.sgdRate, 2);
+            if (currency === "CNY") return roundTo(amountOriginal * rates.value.cnyRate, 2);
+            return roundTo(amountOriginal, 2);
+          }
+
+          function openEdit(item) {
+            editError.value = "";
+            editingId.value = item.id;
+            editDetail.value = String(item.detail || "");
+            editCurrency.value = item.currency || "TWD";
+            editAmount.value = String(item.amountOriginal ?? "");
+            editCategory.value = item.category || "other";
+            editOpen.value = true;
+          }
+
+          function closeEdit() {
+            editOpen.value = false;
+            editingId.value = null;
+            editError.value = "";
+          }
+
+          function saveEdit() {
+            editError.value = "";
+            const id = editingId.value;
+            if (!id) return;
+
+            const detail = normalizeText(editDetail.value);
+            const finalDetail = detail || "未命名消费";
+
+            const amt = Number(editAmount.value);
+            if (!Number.isFinite(amt) || amt <= 0) {
+              editError.value = "请输入大于 0 的金额。";
+              return;
+            }
+
+            const currency = editCurrency.value || "TWD";
+            const amountOriginal = roundTo(amt, currencyDigits(currency));
+            const category = editCategory.value || classify(finalDetail);
+
+            const idx = records.value.findIndex((r) => r.id === id);
+            if (idx === -1) {
+              closeEdit();
+              return;
+            }
+
+            records.value[idx] = {
+              ...records.value[idx],
+              detail: finalDetail,
+              currency,
+              amountOriginal,
+              category,
+            };
+            showToast("已保存");
+            closeEdit();
+          }
+
+          function removeRecord(id) {
+            const item = records.value.find((r) => r.id === id);
+            if (!item) return;
+            const ok = confirm(`确定删除这条记录吗？\n\n${item.detail} ${currencySymbol(item.currency)} ${item.amountOriginal}`);
+            if (!ok) return;
+            records.value = records.value.filter((r) => r.id !== id);
+            showToast("已删除");
+          }
+
+          function formatDate(ts) {
+            const d = new Date(ts);
+            // 移动端更友好：月/日 时:分
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mi = String(d.getMinutes()).padStart(2, "0");
+            return `${mm}/${dd} ${hh}:${mi}`;
+          }
+
+          function normalizeText(s) {
+            return String(s || "")
+              .trim()
+              .replace(/[，,]+/g, " ")
+              .replace(/\s+/g, " ");
+          }
+
+          function classify(detail) {
+            const text = String(detail || "").toLowerCase();
+            for (const rule of keywordRules) {
+              if (rule.keywords.some((k) => text.includes(String(k).toLowerCase()))) return rule.key;
+            }
+            return "other";
+          }
+
+          // ===== 核心算法：智能解析 =====
+          function parseSmartInput(raw, currency = "TWD") {
+            const text = normalizeText(raw);
+            const match = text.match(/(\d+(?:\.\d+)?)/);
+            if (!match) return { ok: false, reason: "未识别到金额数字，请在文本里包含金额，例如“奶茶 60”。" };
+
+            const amountInput = Number(match[1]);
+            if (!Number.isFinite(amountInput) || amountInput <= 0) {
+              return { ok: false, reason: "金额不合法，请输入大于 0 的数字金额。" };
+            }
+
+            // 剩余文字作为消费详情（去掉匹配到的第一段数字）
+            const detail = normalizeText(text.replace(match[0], "").trim());
+            const finalDetail = detail || "未命名消费";
+
+            const category = classify(finalDetail);
+
+            return {
+              ok: true,
+              data: {
+                id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+                detail: finalDetail,
+                currency,          // 用户选择的输入币种
+                amountOriginal: roundTo(amountInput, currencyDigits(currency)), // 用户输入的原始金额
+                category,
+                ts: Date.now(),
+              },
+            };
+          }
+
+          function addFromInput(currency) {
+            errorMsg.value = "";
+            selectedCurrency.value = currency || selectedCurrency.value || "TWD";
+            const parsed = parseSmartInput(inputText.value, selectedCurrency.value);
+            if (!parsed.ok) {
+              errorMsg.value = parsed.reason;
+              return;
+            }
+            records.value.unshift(parsed.data);
+            inputText.value = "";
+            showToast("已记录");
+          }
+
+          function toggleCategory(key) {
+            const set = new Set(expanded.value);
+            if (set.has(key)) set.delete(key);
+            else set.add(key);
+            expanded.value = set;
+          }
+
+          function confirmClearAll() {
+            if (records.value.length === 0) {
+              showToast("暂无可清空的记录");
+              return;
+            }
+            // 原生 confirm：在移动端足够克制“不显眼”
+            const ok = confirm("确定要清空所有记账记录吗？此操作不可撤销。");
+            if (!ok) return;
+            records.value = [];
+            showToast("已清空");
+          }
+
+          const totalTwd = computed(() =>
+            records.value.reduce((sum, r) => sum + getAmountTwd(r), 0)
+          );
+          const totalSgd = computed(() => totalTwd.value / rates.value.sgdRate);
+          const totalCny = computed(() => totalTwd.value / rates.value.cnyRate);
+
+          const grouped = computed(() => {
+            const map = {};
+            for (const c of categories) map[c.key] = { sumTwd: 0, items: [] };
+            for (const r of records.value) {
+              const key = map[r.category] ? r.category : "other";
+              map[key].items.push(r);
+              map[key].sumTwd += getAmountTwd(r);
+            }
+            return map;
+          });
+
+          watch(
+            records,
+            () => saveToStorage(),
+            { deep: true }
+          );
+
+          onMounted(() => loadFromStorage());
+
+          return {
+            rates,
+            categories,
+            records,
+            inputText,
+            errorMsg,
+            toast,
+            selectedCurrency,
+            editOpen,
+            editDetail,
+            editAmount,
+            editCurrency,
+            editCategory,
+            editError,
+            expanded: computed(() => expanded.value), // 供模板使用
+            grouped,
+            totalTwd,
+            totalSgd,
+            totalCny,
+            formatMoney,
+            formatDate,
+            currencySymbol,
+            currencyDigits,
+            getAmountTwd,
+            addFromInput,
+            toggleCategory,
+            confirmClearAll,
+            openEdit,
+            closeEdit,
+            saveEdit,
+            removeRecord,
+          };
+        },
+      }).mount("#app");
+    </script>
+  </body>
+</html>
