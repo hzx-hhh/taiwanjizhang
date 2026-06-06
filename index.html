@@ -6,6 +6,8 @@
     <title>台湾旅行智能记账小助手</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- 云同步（Supabase JS SDK） -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   </head>
   <body class="bg-gray-100 text-gray-900 antialiased">
     <div id="app" class="min-h-dvh pb-24">
@@ -25,6 +27,22 @@
                 class="hidden"
                 @change="onImportFileChange"
               />
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="openLedger"
+                title="设置/复制共享账本ID（用于多人自动同步）"
+              >
+                共享
+              </button>
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="syncNow"
+                title="从云端拉取最新记录（已开启实时同步时一般不需要）"
+              >
+                同步
+              </button>
               <button
                 class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
                 type="button"
@@ -351,6 +369,19 @@
 
           // ===== 状态 =====
           const STORAGE_KEY = "tw_travel_expenses_v1";
+          // ===== 云同步（Supabase）=====
+          // 注意：这里用的是 publishable key（sb_publishable_...），可以放在前端。
+          const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
+          const SUPABASE_URL = SUPABASE_URL_RAW.replace(/\/rest\/v1\/?$/, "");
+          const SUPABASE_ANON_KEY = "sb_publishable_s8kxnb3m4iq2Q9q495KRzg_uErnPqdo";
+          const LEDGER_KEY = "tw_travel_shared_ledger_id_v1";
+
+          const ledgerId = ref(localStorage.getItem(LEDGER_KEY) || "");
+          const cloudReady = ref(false);
+          const cloudError = ref("");
+          let supabaseClient = null;
+          let realtimeChannel = null;
+
           const records = ref([]);
           const inputText = ref("");
           const errorMsg = ref("");
@@ -372,6 +403,225 @@
             toast.value = msg;
             if (toastTimer) clearTimeout(toastTimer);
             toastTimer = setTimeout(() => (toast.value = ""), 1600);
+          }
+
+          // ===== 云同步（Supabase）工具函数 =====
+          function hasSupabaseSDK() {
+            return typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function";
+          }
+
+          function initSupabaseClient() {
+            cloudError.value = "";
+            if (!hasSupabaseSDK()) {
+              cloudReady.value = false;
+              cloudError.value = "Supabase SDK 未加载";
+              return null;
+            }
+            try {
+              // 不使用登录：纯匿名访问（RLS 策略已放开）
+              supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+              });
+              cloudReady.value = true;
+              return supabaseClient;
+            } catch (e) {
+              cloudReady.value = false;
+              cloudError.value = String(e?.message || e || "初始化失败");
+              return null;
+            }
+          }
+
+          function disconnectCloud() {
+            try {
+              if (realtimeChannel) realtimeChannel.unsubscribe();
+            } catch {
+              // ignore
+            }
+            realtimeChannel = null;
+            supabaseClient = null;
+            cloudReady.value = false;
+          }
+
+          function generateLedgerId() {
+            try {
+              const arr = new Uint8Array(16);
+              crypto.getRandomValues(arr);
+              return Array.from(arr)
+                .map((b) => b.toString(16).padStart(2, "0"))
+                .join("");
+            } catch {
+              return `${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`;
+            }
+          }
+
+          function mapDbRowToRecord(row) {
+            if (!row) return null;
+            return normalizeLegacyRecord({
+              id: row.id,
+              detail: row.detail,
+              currency: row.currency || "TWD",
+              amountOriginal: Number(row.amount_original ?? row.amountOriginal ?? 0),
+              category: row.category || "other",
+              ts: Number(row.ts || Date.now()),
+            });
+          }
+
+          async function fetchFromCloud() {
+            if (!ledgerId.value) return [];
+            const client = supabaseClient || initSupabaseClient();
+            if (!client) return [];
+            const { data, error } = await client
+              .from("expense_records")
+              .select("id, detail, currency, amount_original, category, ts")
+              .eq("ledger_id", ledgerId.value)
+              .order("ts", { ascending: false })
+              .limit(5000);
+            if (error) {
+              showToast(`云端拉取失败：${error.message}`);
+              return [];
+            }
+            return (data || []).map(mapDbRowToRecord).filter(Boolean);
+          }
+
+          async function upsertRecordsToCloud(items) {
+            if (!ledgerId.value) return;
+            const client = supabaseClient || initSupabaseClient();
+            if (!client) return;
+            const rows = (items || [])
+              .map(normalizeLegacyRecord)
+              .filter((r) => r && r.id)
+              .map((r) => ({
+                id: r.id,
+                ledger_id: ledgerId.value,
+                detail: r.detail || "",
+                currency: r.currency || "TWD",
+                amount_original: Number(r.amountOriginal ?? 0),
+                category: r.category || "other",
+                ts: Number(r.ts || Date.now()),
+                updated_at: new Date().toISOString(),
+              }));
+            if (rows.length === 0) return;
+            const { error } = await client.from("expense_records").upsert(rows, { onConflict: "id" });
+            if (error) showToast(`云端写入失败：${error.message}`);
+          }
+
+          async function deleteRecordFromCloud(id) {
+            if (!ledgerId.value || !id) return;
+            const client = supabaseClient || initSupabaseClient();
+            if (!client) return;
+            const { error } = await client.from("expense_records").delete().eq("ledger_id", ledgerId.value).eq("id", id);
+            if (error) showToast(`云端删除失败：${error.message}`);
+          }
+
+          function applyRemoteUpsert(r) {
+            if (!r || !r.id) return;
+            const idx = records.value.findIndex((x) => x.id === r.id);
+            if (idx === -1) {
+              records.value.unshift(r);
+            } else {
+              const prevTs = Number(records.value[idx]?.ts || 0);
+              const newTs = Number(r.ts || 0);
+              if (newTs >= prevTs) records.value[idx] = { ...records.value[idx], ...r };
+            }
+            records.value.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+          }
+
+          function applyRemoteDelete(id) {
+            records.value = records.value.filter((x) => x.id !== id);
+          }
+
+          function subscribeRealtime() {
+            const client = supabaseClient || initSupabaseClient();
+            if (!client || !ledgerId.value) return;
+            try {
+              if (realtimeChannel) realtimeChannel.unsubscribe();
+            } catch {
+              // ignore
+            }
+            realtimeChannel = client
+              .channel(`ledger:${ledgerId.value}`)
+              .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "expense_records", filter: `ledger_id=eq.${ledgerId.value}` },
+                (payload) => {
+                  if (!payload) return;
+                  if (payload.eventType === "DELETE") {
+                    const id = payload.old?.id;
+                    if (id) applyRemoteDelete(id);
+                    return;
+                  }
+                  const rec = mapDbRowToRecord(payload.new);
+                  if (rec) applyRemoteUpsert(rec);
+                }
+              )
+              .subscribe((status) => {
+                if (status === "SUBSCRIBED") showToast("云端实时同步已连接");
+              });
+          }
+
+          async function connectAndSync({ askUpload = true } = {}) {
+            if (!ledgerId.value) {
+              disconnectCloud();
+              return;
+            }
+            initSupabaseClient();
+
+            // 先拉云端
+            const localBefore = [...records.value];
+            const cloudItems = await fetchFromCloud();
+
+            // 让本机先显示云端（避免重复/乱序）
+            records.value = cloudItems;
+
+            // 如本机原本有数据，提示是否合并上传到云端
+            if (askUpload && localBefore.length > 0) {
+              const cloudCount = cloudItems.length;
+              const localCount = localBefore.length;
+              const msg =
+                cloudCount === 0
+                  ? `检测到本机有 ${localCount} 条记录。\n是否上传到共享账本（让对方也能看到）？`
+                  : `云端已有 ${cloudCount} 条，本机还有 ${localCount} 条。\n是否把本机记录也合并上传到云端？`;
+              const ok = confirm(msg);
+              if (ok) {
+                await upsertRecordsToCloud(localBefore);
+                const merged = await fetchFromCloud();
+                records.value = merged;
+              }
+            }
+
+            subscribeRealtime();
+          }
+
+          async function syncNow() {
+            if (!ledgerId.value) {
+              showToast("还没设置共享账本ID");
+              return;
+            }
+            const cloudItems = await fetchFromCloud();
+            records.value = cloudItems;
+            showToast("已从云端同步");
+          }
+
+          async function openLedger() {
+            const current = ledgerId.value || "";
+            const tip = current
+              ? `当前共享账本ID：\n${current}\n\n你可以直接复制发给别人。\n\n如需更换/加入别人的账本：在下方输入新的ID。`
+              : "输入共享账本ID（别人发你的那串）。\n\n如果你想新建一个账本，留空直接点确定即可自动生成。";
+            const input = prompt(tip, current);
+            if (input === null) return; // 取消
+            const next = String(input || "").trim() || generateLedgerId();
+            ledgerId.value = next;
+            localStorage.setItem(LEDGER_KEY, next);
+
+            // 尝试复制到剪贴板（方便发给别人）
+            try {
+              if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(next);
+              showToast("已设置共享账本ID（已复制）");
+            } catch {
+              showToast("已设置共享账本ID");
+            }
+
+            await connectAndSync({ askUpload: true });
           }
 
           function safeParseJSON(str) {
@@ -487,6 +737,7 @@
 
             records.value[idx] = { ...records.value[idx], detail: finalDetail, currency, amountOriginal, category };
             showToast("已保存");
+            if (ledgerId.value) upsertRecordsToCloud([records.value[idx]]);
             closeEdit();
           }
 
@@ -497,6 +748,7 @@
             if (!ok) return;
             records.value = records.value.filter((r) => r.id !== id);
             showToast("已删除");
+            if (ledgerId.value) deleteRecordFromCloud(id);
           }
 
           function formatDate(ts) {
@@ -555,6 +807,7 @@
             records.value.unshift(parsed.data);
             inputText.value = "";
             showToast("已记录");
+            if (ledgerId.value) upsertRecordsToCloud([parsed.data]);
           }
 
           function toggleCategory(key) {
@@ -564,7 +817,7 @@
             expanded.value = set;
           }
 
-          function confirmClearAll() {
+          async function confirmClearAll() {
             if (records.value.length === 0) {
               showToast("暂无可清空的记录");
               return;
@@ -573,6 +826,16 @@
             if (!ok) return;
             records.value = [];
             showToast("已清空");
+            if (ledgerId.value) {
+              const okCloud = confirm("是否同时清空云端共享账本？\n（多人共享时建议选“确定”，避免对方还看到旧数据）");
+              if (okCloud) {
+                const client = supabaseClient || initSupabaseClient();
+                if (client) {
+                  const { error } = await client.from("expense_records").delete().eq("ledger_id", ledgerId.value);
+                  if (error) showToast(`云端清空失败：${error.message}`);
+                }
+              }
+            }
           }
 
           // ===== 导出 CSV（手机友好） =====
@@ -717,6 +980,7 @@
                 }
                 const r = mergeImportedRecords(incoming);
                 showToast(`已导入：新增${r.added}条，更新${r.updated}条`);
+                if (ledgerId.value) upsertRecordsToCloud(incoming);
               } catch {
                 showToast("导入失败：JSON 无法解析");
               }
@@ -947,7 +1211,11 @@
           });
 
           watch(records, () => saveToStorage(), { deep: true });
-          onMounted(() => loadFromStorage());
+          onMounted(() => {
+            loadFromStorage();
+            // 如果之前已经设置过共享账本ID，则自动连接云端（不弹上传提示）
+            if (ledgerId.value) connectAndSync({ askUpload: false });
+          });
 
           return {
             rates,
@@ -980,6 +1248,8 @@
             closeEdit,
             saveEdit,
             removeRecord,
+            openLedger,
+            syncNow,
             importFileEl,
             triggerImport,
             onImportFileChange,
