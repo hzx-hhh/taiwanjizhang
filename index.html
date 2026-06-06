@@ -18,13 +18,44 @@
               <p class="mt-0.5 text-xs text-gray-500">智能录入 · 自动分类 · 三币种实时换算</p>
             </div>
             <div class="flex items-center gap-2">
+              <input
+                ref="importFileEl"
+                type="file"
+                accept="application/json,.json"
+                class="hidden"
+                @change="onImportFileChange"
+              />
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="triggerImport"
+                title="导入他人发来的备份（JSON），合并到本机"
+              >
+                导入
+              </button>
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="exportBackupJSON"
+                title="导出可给别人继续记的备份（JSON）"
+              >
+                备份
+              </button>
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="exportHTML"
+                title="导出账本为 HTML（更适合手机直接查看/分享）"
+              >
+                导出HTML
+              </button>
               <button
                 class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
                 type="button"
                 @click="exportCSV"
                 title="导出全部记录为 CSV"
               >
-                导出
+                导出CSV
               </button>
               <button
                 class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
@@ -601,6 +632,99 @@
             setTimeout(() => URL.revokeObjectURL(url), 1500);
           }
 
+          // ===== 备份导出/导入（JSON，手动同步用） =====
+          const importFileEl = ref(null);
+
+          function buildBackupFilenameJson() {
+            const d = new Date();
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mi = String(d.getMinutes()).padStart(2, "0");
+            return `台湾旅行记账_备份_${yyyy}${mm}${dd}_${hh}${mi}.json`;
+          }
+
+          function exportBackupJSON() {
+            const filename = buildBackupFilenameJson();
+            const payload = {
+              app: "taiwanjizhang",
+              version: 1,
+              exportedAt: Date.now(),
+              rates: rates.value,
+              records: records.value,
+            };
+            const json = JSON.stringify(payload, null, 2);
+            const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+            downloadBlob(blob, filename);
+            showToast("已导出备份");
+          }
+
+          function triggerImport() {
+            if (!importFileEl.value) return;
+            importFileEl.value.value = ""; // 允许重复导入同一个文件
+            importFileEl.value.click();
+          }
+
+          function mergeImportedRecords(incoming) {
+            const normalized = (Array.isArray(incoming) ? incoming : [])
+              .map(normalizeLegacyRecord)
+              .filter((r) => r && r.id);
+
+            const map = new Map(records.value.map((r) => [r.id, r]));
+            let added = 0;
+            let updated = 0;
+
+            for (const r of normalized) {
+              const prev = map.get(r.id);
+              if (!prev) {
+                map.set(r.id, r);
+                added++;
+                continue;
+              }
+              // 如果同一 id，保留时间更新更晚的一条
+              const prevTs = Number(prev.ts || 0);
+              const newTs = Number(r.ts || 0);
+              if (newTs > prevTs) {
+                map.set(r.id, { ...prev, ...r });
+                updated++;
+              }
+            }
+
+            const merged = Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+            records.value = merged;
+            return { added, updated, total: merged.length };
+          }
+
+          function onImportFileChange(e) {
+            const file = e?.target?.files?.[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+              try {
+                const text = String(reader.result || "");
+                const data = JSON.parse(text);
+                const incoming = Array.isArray(data) ? data : Array.isArray(data?.records) ? data.records : null;
+                if (!incoming) {
+                  showToast("导入失败：文件格式不对");
+                  return;
+                }
+                // 如果备份里带了汇率，顺便同步
+                if (data?.rates && typeof data.rates === "object") {
+                  if (typeof data.rates.sgdRate === "number") rates.value.sgdRate = data.rates.sgdRate;
+                  if (typeof data.rates.cnyRate === "number") rates.value.cnyRate = data.rates.cnyRate;
+                }
+                const r = mergeImportedRecords(incoming);
+                showToast(`已导入：新增${r.added}条，更新${r.updated}条`);
+              } catch {
+                showToast("导入失败：JSON 无法解析");
+              }
+            };
+            reader.onerror = () => showToast("导入失败：读取文件出错");
+            reader.readAsText(file, "utf-8");
+          }
+
           async function exportCSV() {
             if (records.value.length === 0) {
               showToast("暂无可导出的记录");
@@ -615,6 +739,187 @@
               const file = new File([blob], filename, { type: blob.type });
               if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
                 await navigator.share({ files: [file], title: "记账记录（CSV）" });
+                showToast("已打开分享");
+                return;
+              }
+            } catch {
+              // ignore
+            }
+
+            downloadBlob(blob, filename);
+            showToast("已导出");
+          }
+
+          // ===== 导出 HTML（手机查看/分享更友好） =====
+          function htmlEscape(value) {
+            const s = value === null || value === undefined ? "" : String(value);
+            return s
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }
+
+          function buildExportFilenameHtml() {
+            const d = new Date();
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mi = String(d.getMinutes()).padStart(2, "0");
+            return `台湾旅行记账_${yyyy}${mm}${dd}_${hh}${mi}.html`;
+          }
+
+          function buildExportHTML() {
+            const now = new Date();
+            const generatedAt = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(
+              now.getHours()
+            ).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+            // 先算汇总
+            const totalTwdValue = roundTo(records.value.reduce((sum, r) => sum + getAmountTwd(r), 0), 2);
+            const totalSgdValue = roundTo(totalTwdValue / rates.value.sgdRate, 2);
+            const totalCnyValue = roundTo(totalTwdValue / rates.value.cnyRate, 2);
+
+            const items = [...records.value].slice().reverse(); // 从早到晚
+
+            // 分类汇总
+            const sums = {};
+            for (const c of categories) sums[c.key] = 0;
+            for (const r of items) {
+              const k = sums[r.category] !== undefined ? r.category : "other";
+              sums[k] += getAmountTwd(r);
+            }
+
+            const summaryRows = categories
+              .map((c) => {
+                const twd = roundTo(sums[c.key] || 0, 2);
+                const cny = roundTo(twd / rates.value.cnyRate, 2);
+                return `<tr>
+  <td>${htmlEscape(c.emoji)} ${htmlEscape(c.label)}</td>
+  <td class="num">NT$ ${htmlEscape(formatMoney(twd, 2))}</td>
+  <td class="num">¥ ${htmlEscape(formatMoney(cny, 2))}</td>
+</tr>`;
+              })
+              .join("\n");
+
+            const tableRows = items
+              .map((r) => {
+                const twd = roundTo(getAmountTwd(r), 2);
+                return `<tr>
+  <td class="nowrap">${htmlEscape(formatDateFull(r.ts))}</td>
+  <td>${htmlEscape(categoryLabelMap[r.category] || "其他")}</td>
+  <td>${htmlEscape(r.detail || "")}</td>
+  <td class="num nowrap">${htmlEscape(currencySymbol(r.currency))} ${htmlEscape(formatMoney(r.amountOriginal ?? "", currencyDigits(r.currency)))}</td>
+  <td class="num nowrap">NT$ ${htmlEscape(formatMoney(twd, 2))}</td>
+</tr>`;
+              })
+              .join("\n");
+
+            return `<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>台湾旅行记账（导出）</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font-family: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", Segoe UI, Roboto, Arial; background: #f3f4f6; color: #111827; }
+      .wrap { max-width: 860px; margin: 0 auto; padding: 16px; }
+      .card { background: #fff; border: 1px solid rgba(17,24,39,.08); border-radius: 16px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+      h1 { font-size: 16px; margin: 0; }
+      .muted { color: #6b7280; font-size: 12px; margin-top: 4px; line-height: 1.4; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+      @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
+      .kpi { display:flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+      .kpi .big { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+      .kpi .small { font-size: 13px; color: #374151; text-align: right; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { border-bottom: 1px solid rgba(17,24,39,.08); padding: 10px 8px; vertical-align: top; }
+      th { text-align: left; font-size: 12px; color: #6b7280; background: #fafafa; position: sticky; top: 0; }
+      .num { text-align: right; font-variant-numeric: tabular-nums; }
+      .nowrap { white-space: nowrap; }
+      .tablewrap { overflow: auto; border-radius: 12px; border: 1px solid rgba(17,24,39,.08); }
+      .foot { margin-top: 10px; font-size: 12px; color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>台湾旅行记账（导出）</h1>
+        <div class="muted">生成时间：${htmlEscape(generatedAt)} · 记录数：${htmlEscape(items.length)}</div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="kpi">
+            <div>
+              <div class="muted">总支出</div>
+              <div class="big">¥ ${htmlEscape(formatMoney(totalCnyValue, 2))}</div>
+            </div>
+            <div class="small">
+              <div>NT$ ${htmlEscape(formatMoney(totalTwdValue, 2))}</div>
+              <div>SGD ${htmlEscape(formatMoney(totalSgdValue, 2))}</div>
+            </div>
+          </div>
+          <div class="foot">汇率：1 SGD = ${htmlEscape(rates.value.sgdRate)} TWD · 1 CNY = ${htmlEscape(rates.value.cnyRate)} TWD</div>
+        </div>
+
+        <div class="card">
+          <div class="muted" style="margin:0 0 8px 0;">分类汇总</div>
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr><th>分类</th><th class="num">合计TWD</th><th class="num">合计CNY</th></tr>
+              </thead>
+              <tbody>
+                ${summaryRows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 12px;">
+        <div class="muted" style="margin:0 0 8px 0;">明细</div>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="nowrap">时间</th>
+                <th>分类</th>
+                <th>详情</th>
+                <th class="num nowrap">原始金额</th>
+                <th class="num nowrap">折合TWD</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRows}
+            </tbody>
+          </table>
+        </div>
+        <div class="foot">提示：在手机上直接用浏览器打开即可查看；也可以“打印/分享为 PDF”。</div>
+      </div>
+    </div>
+  </body>
+</html>`;
+          }
+
+          async function exportHTML() {
+            if (records.value.length === 0) {
+              showToast("暂无可导出的记录");
+              return;
+            }
+
+            const filename = buildExportFilenameHtml();
+            const html = buildExportHTML();
+            const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+
+            try {
+              const file = new File([blob], filename, { type: blob.type });
+              if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+                await navigator.share({ files: [file], title: "记账记录（HTML）" });
                 showToast("已打开分享");
                 return;
               }
@@ -675,6 +980,11 @@
             closeEdit,
             saveEdit,
             removeRecord,
+            importFileEl,
+            triggerImport,
+            onImportFileChange,
+            exportBackupJSON,
+            exportHTML,
             exportCSV,
           };
         },
