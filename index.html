@@ -547,9 +547,9 @@
           // ===== 导出 CSV（手机友好） =====
           function csvEscape(value) {
             const s = value === null || value === undefined ? "" : String(value);
-            const needsQuote = /[\",\\n\\r]/.test(s);
-            const escaped = s.replace(/\"/g, '\"\"');
-            return needsQuote ? `\"${escaped}\"` : escaped;
+            const needsQuote = /[",\n\r]/.test(s);
+            const escaped = s.replace(/"/g, '""');
+            return needsQuote ? `"${escaped}"` : escaped;
           }
 
           function buildCSV() {
@@ -575,7 +575,8 @@
                   .join(",")
               );
             }
-            return lines.join("\\n");
+            // 用 CRLF：在手机/Excel/表格类 App 里更稳，不容易变成“一行”
+            return lines.join("\r\n");
           }
 
           function buildExportFilename() {
@@ -608,7 +609,7 @@
 
             const filename = buildExportFilename();
             const csv = buildCSV();
-            const blob = new Blob(["\\ufeff", csv], { type: "text/csv;charset=utf-8" }); // BOM 防乱码
+            const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }); // BOM 防乱码
 
             try {
               const file = new File([blob], filename, { type: blob.type });
