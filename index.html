@@ -3,11 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>台湾旅行智能记账小助手</title>
+    <title>旅行记账小助手</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <!-- 云同步（Supabase JS SDK） -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   </head>
   <body class="bg-gray-100 text-gray-900 antialiased">
     <div id="app" class="min-h-dvh pb-24">
@@ -18,152 +16,191 @@
         class="hidden"
         @change="handleImportFile"
       />
-      <!-- 顶部标题 -->
+
       <header class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur">
         <div class="mx-auto max-w-md px-4 py-3">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <h1 class="text-base font-semibold tracking-tight">台湾旅行智能记账小助手</h1>
-              <p class="mt-0.5 text-xs text-gray-500">智能录入 · 自动分类 · 三币种实时换算</p>
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-[11px] uppercase tracking-[0.16em] text-gray-400">Travel Ledger</p>
+              <h1 class="truncate text-base font-semibold tracking-tight">
+                {{ currentLedger ? currentLedger.name : "旅行记账小助手" }}
+              </h1>
+              <p class="mt-0.5 text-xs text-gray-500">
+                多账本独立存储 · 人民币为基准 · 币种与汇率可自定义
+              </p>
             </div>
-            <div class="flex items-center gap-2">
-              <button
-                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
-                type="button"
-                @click="triggerImport"
-                title="导入 JSON 账单文件"
-              >
-                导入
-              </button>
-              <button
-                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
-                type="button"
-                @click="exportJson"
-                title="导出 JSON 账单文件"
-              >
-                导出
-              </button>
-              <button
-                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
-                type="button"
-                @click="openLedger"
-                title="设置/复制共享账本ID（用于多人自动同步）"
-              >
-                共享
-              </button>
-              <button
-                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
-                type="button"
-                @click="syncNow"
-                title="从云端拉取最新记录（已开启实时同步时一般不需要）"
-              >
-                同步
-              </button>
-              <button
-                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
-                type="button"
-                @click="confirmClearAll"
-                title="清空所有记录"
-              >
-                清空
-              </button>
-            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 shadow-sm active:opacity-80"
+              @click="openLedgerPicker"
+            >
+              切换账本
+            </button>
+          </div>
+
+          <div class="mt-3 flex gap-2 overflow-x-auto pb-1 text-xs text-gray-600">
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openLedgerPicker"
+            >
+              账本管理
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openCurrencyManager"
+              :disabled="!currentLedger"
+            >
+              币种设置
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="renameCurrentLedger"
+              :disabled="!currentLedger"
+            >
+              修改名称
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="triggerImport"
+            >
+              导入 JSON
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="exportJson"
+              :disabled="!currentLedger"
+            >
+              导出 JSON
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 text-red-600 shadow-sm active:opacity-80"
+              @click="confirmClearCurrentLedger"
+              :disabled="!currentLedger"
+            >
+              清空当前账本
+            </button>
           </div>
         </div>
       </header>
 
-      <main class="mx-auto max-w-md px-4">
-        <!-- 输入面板 -->
+      <main v-if="currentLedger" class="mx-auto max-w-md px-4">
         <section class="mt-4">
           <div class="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-black/5">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium text-gray-900">智能录入</p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  当前以 {{ selectedCurrencyMeta.name }}（{{ selectedCurrencyMeta.code }}）录入
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm active:opacity-90 disabled:opacity-50"
+                :disabled="!inputText.trim()"
+                @click="addFromInput"
+              >
+                记录
+              </button>
+            </div>
+
             <label class="sr-only" for="smartInput">智能录入</label>
-            <div class="flex items-center gap-2">
-              <input
-                id="smartInput"
-                v-model="inputText"
-                @keydown.enter.prevent="addFromInput(selectedCurrency)"
-                class="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none ring-0 placeholder:text-gray-400 focus:border-gray-300 focus:bg-white"
-                type="text"
-                inputmode="text"
-                placeholder="例如：阿宗面线 75，高铁票 1500"
-              />
-              <div class="shrink-0 flex items-center rounded-xl bg-gray-50 p-1 ring-1 ring-gray-200">
+            <input
+              id="smartInput"
+              v-model="inputText"
+              @keydown.enter.prevent="addFromInput"
+              class="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400 focus:border-gray-300 focus:bg-white"
+              type="text"
+              inputmode="text"
+              placeholder="例如：机票 870，奶茶 25，酒店 680"
+            />
+
+            <div class="mt-3">
+              <div class="flex gap-2 overflow-x-auto pb-1">
                 <button
-                  class="rounded-lg px-3 py-2 text-sm font-medium tabular-nums active:opacity-80 disabled:opacity-50"
-                  :class="selectedCurrency==='TWD' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'"
+                  v-for="currency in sortedCurrentCurrencies"
+                  :key="currency.code"
                   type="button"
-                  :disabled="!inputText.trim()"
-                  @click="addFromInput('TWD')"
-                  title="以新台币记录"
+                  class="whitespace-nowrap rounded-full border px-3 py-2 text-sm font-medium shadow-sm transition active:opacity-80"
+                  :class="currentLedger.selectedCurrency === currency.code
+                    ? 'border-gray-900 bg-gray-900 text-white'
+                    : 'border-gray-200 bg-white text-gray-700'"
+                  @click="setSelectedCurrency(currency.code)"
                 >
-                  NT$
-                </button>
-                <button
-                  class="rounded-lg px-3 py-2 text-sm font-medium tabular-nums active:opacity-80 disabled:opacity-50"
-                  :class="selectedCurrency==='SGD' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'"
-                  type="button"
-                  :disabled="!inputText.trim()"
-                  @click="addFromInput('SGD')"
-                  title="以新币记录"
-                >
-                  S$
-                </button>
-                <button
-                  class="rounded-lg px-3 py-2 text-sm font-medium tabular-nums active:opacity-80 disabled:opacity-50"
-                  :class="selectedCurrency==='CNY' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-700 hover:bg-white'"
-                  type="button"
-                  :disabled="!inputText.trim()"
-                  @click="addFromInput('CNY')"
-                  title="以人民币记录"
-                >
-                  ¥
+                  {{ currency.symbol || currency.code }} {{ currency.code }}
                 </button>
               </div>
+              <p class="mt-2 text-xs text-gray-500">
+                提示：先选币种，再输入“消费内容 + 金额”；不同账本的币种与汇率互不影响。
+              </p>
+              <p v-if="errorMsg" class="mt-2 text-xs text-red-600">{{ errorMsg }}</p>
             </div>
-            <p class="mt-2 text-xs text-gray-500">提示：直接输入“消费内容 + 金额”，例如“夜市奶茶 60”。</p>
-            <p v-if="errorMsg" class="mt-2 text-xs text-red-600">{{ errorMsg }}</p>
           </div>
         </section>
 
-        <!-- 总计看板 -->
         <section class="mt-4">
           <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5">
             <div class="flex items-start justify-between gap-3">
               <div>
-                <p class="text-xs text-gray-500">总支出</p>
-                <p class="mt-1 text-3xl font-semibold tabular-nums tracking-tight">¥ {{ formatMoney(totalCny, 2) }}</p>
+                <p class="text-xs text-gray-500">总支出（人民币基准）</p>
+                <p class="mt-1 text-3xl font-semibold tabular-nums tracking-tight">
+                  ¥ {{ formatMoney(totalCny, 2) }}
+                </p>
               </div>
               <div class="text-right">
-                <p class="text-xs text-gray-500">折合</p>
-                <p class="mt-1 text-sm tabular-nums text-gray-700">NT$ {{ formatMoney(totalTwd, 2) }}</p>
-                <p class="mt-0.5 text-sm tabular-nums text-gray-700">SGD {{ formatMoney(totalSgd, 2) }}</p>
+                <p class="text-xs text-gray-500">当前换算</p>
+                <p class="mt-1 text-sm tabular-nums text-gray-700">
+                  {{ selectedCurrencyMeta.symbol || selectedCurrencyMeta.code }}
+                  {{ formatMoney(totalInSelectedCurrency, currencyDigits(selectedCurrencyMeta.code)) }}
+                </p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  {{ selectedCurrencyMeta.code }} · {{ currentLedger.records.length }} 条记录
+                </p>
               </div>
             </div>
 
-            <div class="mt-3 grid grid-cols-2 gap-2">
-              <div class="rounded-xl bg-gray-50 px-3 py-2">
-                <p class="text-[11px] text-gray-500">汇率</p>
-                <p class="mt-1 text-xs text-gray-700">
-                  1 SGD = <span class="tabular-nums">{{ rates.sgdRate }}</span> TWD
-                </p>
-                <p class="mt-0.5 text-xs text-gray-700">
-                  1 CNY = <span class="tabular-nums">{{ rates.cnyRate }}</span> TWD
+            <div class="mt-3 rounded-2xl bg-gray-50 px-3 py-3">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-[11px] text-gray-500">汇率说明</p>
+                  <p class="mt-1 text-xs text-gray-700">
+                    所有汇率均按“1 单位外币 = 多少人民币（CNY）”存储
+                  </p>
+                </div>
+                <p class="text-right text-[11px] text-gray-500">
+                  默认汇率参考<br />
+                  {{ defaultRateSource }}
                 </p>
               </div>
-              <div class="rounded-xl bg-gray-50 px-3 py-2">
-                <p class="text-[11px] text-gray-500">记录数</p>
-                <p class="mt-1 text-xs text-gray-700"><span class="tabular-nums">{{ records.length }}</span> 条</p>
-                <p class="mt-0.5 text-xs text-gray-500">数据已自动保存在本机浏览器</p>
+              <div class="mt-3 flex gap-2 overflow-x-auto pb-1">
+                <div
+                  v-for="currency in sortedCurrentCurrencies"
+                  :key="currency.code"
+                  class="min-w-[122px] rounded-2xl border border-white/70 bg-white px-3 py-2 shadow-sm"
+                >
+                  <p class="text-[11px] text-gray-500">
+                    {{ currency.name }} · {{ currency.code }}
+                  </p>
+                  <p class="mt-1 text-sm font-medium tabular-nums text-gray-900">
+                    1 {{ currency.code }} = ¥ {{ formatMoney(currency.rateToCny, 4) }}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- 分类明细 -->
         <section class="mt-4">
           <div class="mb-2 px-1">
             <h2 class="text-sm font-semibold text-gray-800">分类明细</h2>
-            <p class="mt-0.5 text-xs text-gray-500">按大类分组展示（点击可展开/收起）</p>
+            <p class="mt-0.5 text-xs text-gray-500">
+              分类金额统一按人民币汇总，单条记录保留原始币种
+            </p>
           </div>
 
           <div class="space-y-3">
@@ -182,19 +219,21 @@
                   <div>
                     <p class="text-sm font-medium text-gray-900">{{ cat.label }}</p>
                     <p class="mt-0.5 text-xs text-gray-500">
-                      <span class="tabular-nums">{{ grouped[cat.key]?.items?.length ?? 0 }}</span> 条
+                      {{ grouped[cat.key]?.items?.length ?? 0 }} 条
                     </p>
                   </div>
                 </div>
                 <div class="text-right">
                   <p class="text-sm font-semibold tabular-nums">
-                    ¥ {{ formatMoney((grouped[cat.key]?.sumTwd ?? 0) / rates.cnyRate, 2) }}
+                    ¥ {{ formatMoney(grouped[cat.key]?.sumCny ?? 0, 2) }}
                   </p>
-                  <p class="mt-0.5 text-xs text-gray-500">{{ expanded.has(cat.key) ? "收起" : "展开" }}</p>
+                  <p class="mt-0.5 text-xs text-gray-500">
+                    {{ isCategoryExpanded(cat.key) ? "收起" : "展开" }}
+                  </p>
                 </div>
               </button>
 
-              <div v-if="expanded.has(cat.key)" class="border-t border-gray-100">
+              <div v-if="isCategoryExpanded(cat.key)" class="border-t border-gray-100">
                 <div v-if="(grouped[cat.key]?.items?.length ?? 0) === 0" class="px-4 py-3 text-xs text-gray-500">
                   暂无记录
                 </div>
@@ -210,11 +249,13 @@
                     </div>
                     <div class="shrink-0 text-right">
                       <p class="text-sm font-medium tabular-nums">
-                        {{ currencySymbol(item.currency) }} {{ formatMoney(item.amountOriginal, currencyDigits(item.currency)) }}
+                        {{ currencySymbol(item.currency) }}
+                        {{ formatMoney(item.amountOriginal, currencyDigits(item.currency)) }}
                       </p>
                       <p class="mt-0.5 text-[11px] tabular-nums text-gray-500">
-                        约 NT$ {{ formatMoney(getAmountTwd(item), 2) }} · SGD {{ formatMoney(getAmountTwd(item) / rates.sgdRate, 2) }} · ¥
-                        {{ formatMoney(getAmountTwd(item) / rates.cnyRate, 2) }}
+                        约 ¥ {{ formatMoney(getAmountCny(item), 2) }} ·
+                        {{ selectedCurrencyMeta.code }}
+                        {{ formatMoney(convertFromCny(getAmountCny(item), selectedCurrencyMeta.code), currencyDigits(selectedCurrencyMeta.code)) }}
                       </p>
                       <div class="mt-2 flex justify-end gap-2">
                         <button
@@ -240,28 +281,269 @@
           </div>
         </section>
 
-        <!-- 底部安全区占位 -->
         <div class="h-10"></div>
       </main>
 
-      <!-- 轻提示 -->
-      <div v-if="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-30 w-[calc(100%-2rem)] max-w-md -translate-x-1/2">
+      <div
+        v-if="toast"
+        class="pointer-events-none fixed bottom-6 left-1/2 z-40 w-[calc(100%-2rem)] max-w-md -translate-x-1/2"
+      >
         <div class="rounded-xl bg-gray-900/90 px-4 py-3 text-center text-sm text-white shadow-lg backdrop-blur">
           {{ toast }}
         </div>
       </div>
 
-      <!-- 编辑/删除：底部弹层 -->
-      <div v-if="editOpen" class="fixed inset-0 z-40">
-        <button type="button" class="absolute inset-0 h-full w-full bg-black/30" @click="closeEdit" aria-label="关闭"></button>
+      <div v-if="showLedgerSheet" class="fixed inset-0 z-30">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closeLedgerPicker"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">选择账本</p>
+                <p class="mt-0.5 text-xs text-gray-500">多个行程可并存保存，彼此独立</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeLedgerPicker"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-4 max-h-[48vh] space-y-2 overflow-y-auto pr-1">
+              <div
+                v-for="ledger in appState.ledgers"
+                :key="ledger.id"
+                class="rounded-2xl border border-gray-200 bg-gray-50 p-3"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium text-gray-900">{{ ledger.name }}</p>
+                    <p class="mt-0.5 text-xs text-gray-500">
+                      {{ ledger.records.length }} 条记录 · {{ ledger.currencies.length }} 个币种
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-lg bg-gray-900 px-3 py-1.5 text-xs text-white active:opacity-80"
+                    @click="enterLedger(ledger.id)"
+                  >
+                    进入
+                  </button>
+                </div>
+                <div class="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 active:opacity-80"
+                    @click="renameLedgerById(ledger.id)"
+                  >
+                    重命名
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-red-600 active:opacity-80"
+                    @click="deleteLedgerById(ledger.id)"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 rounded-2xl bg-gray-50 p-3">
+              <p class="text-sm font-medium text-gray-900">新建账本</p>
+              <div class="mt-2 flex items-center gap-2">
+                <input
+                  v-model="newLedgerName"
+                  type="text"
+                  class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                  placeholder="例如：东京旅行记账小助手"
+                />
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                  @click="createLedger"
+                >
+                  新建
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="showCurrencySheet && currentLedger" class="fixed inset-0 z-30">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closeCurrencyManager"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">币种与汇率设置</p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  人民币固定为基准，其他币种按“1 单位外币 = 多少 CNY”设置
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeCurrencyManager"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-4 max-h-[42vh] space-y-3 overflow-y-auto pr-1">
+              <div
+                v-for="currency in currentLedger.currencies"
+                :key="currency.code"
+                class="rounded-2xl border border-gray-200 bg-gray-50 p-3"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span class="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-700 ring-1 ring-gray-200">
+                      {{ currency.code }}
+                    </span>
+                    <p class="text-sm font-medium text-gray-900">{{ currency.name }}</p>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded-lg px-2 py-1 text-xs active:opacity-80"
+                    :class="currency.code === 'CNY'
+                      ? 'cursor-not-allowed text-gray-300'
+                      : 'text-red-600 hover:bg-red-50'"
+                    :disabled="currency.code === 'CNY'"
+                    @click="removeCurrency(currency.code)"
+                  >
+                    删除
+                  </button>
+                </div>
+
+                <div class="mt-3 grid grid-cols-3 gap-2">
+                  <div>
+                    <label class="text-[11px] text-gray-500">名称</label>
+                    <input
+                      :value="currency.name"
+                      @input="updateCurrencyField(currency.code, 'name', $event.target.value)"
+                      type="text"
+                      class="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] text-gray-500">符号</label>
+                    <input
+                      :value="currency.symbol"
+                      @input="updateCurrencyField(currency.code, 'symbol', $event.target.value)"
+                      type="text"
+                      class="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] text-gray-500">汇率（对 CNY）</label>
+                    <input
+                      :value="currency.rateToCny"
+                      @input="updateCurrencyRate(currency.code, $event.target.value)"
+                      :readonly="currency.code === 'CNY'"
+                      type="number"
+                      inputmode="decimal"
+                      step="0.0001"
+                      class="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300 read-only:bg-gray-100"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 space-y-3 rounded-2xl bg-gray-50 p-3">
+              <div>
+                <p class="text-sm font-medium text-gray-900">添加默认币种</p>
+                <div class="mt-2 flex items-center gap-2">
+                  <select
+                    v-model="quickAddCurrencyCode"
+                    class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                  >
+                    <option value="">请选择一个默认币种</option>
+                    <option
+                      v-for="item in missingDefaultCurrencies"
+                      :key="item.code"
+                      :value="item.code"
+                    >
+                      {{ item.name }}（{{ item.code }}）
+                    </option>
+                  </select>
+                  <button
+                    type="button"
+                    class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                    @click="addDefaultCurrency"
+                  >
+                    添加
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <p class="text-sm font-medium text-gray-900">新增自定义币种</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    v-model="newCurrencyCode"
+                    type="text"
+                    maxlength="10"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm uppercase outline-none focus:border-gray-300"
+                    placeholder="代码，如 THB"
+                  />
+                  <input
+                    v-model="newCurrencyName"
+                    type="text"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    placeholder="名称，如 泰铢"
+                  />
+                  <input
+                    v-model="newCurrencySymbol"
+                    type="text"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    placeholder="符号，如 ฿"
+                  />
+                  <input
+                    v-model="newCurrencyRate"
+                    type="number"
+                    inputmode="decimal"
+                    step="0.0001"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    placeholder="1 单位 = 多少 CNY"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="mt-2 w-full rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                  @click="addCustomCurrency"
+                >
+                  添加自定义币种
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="editOpen && currentLedger" class="fixed inset-0 z-40">
+        <button
+          type="button"
+          class="absolute inset-0 h-full w-full bg-black/30"
+          @click="closeEdit"
+          aria-label="关闭"
+        ></button>
         <div class="pointer-events-none absolute inset-x-0 bottom-0">
           <div class="pointer-events-auto mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
             <div class="flex items-start justify-between gap-3">
               <div>
                 <p class="text-sm font-semibold text-gray-900">编辑记录</p>
-                <p class="mt-0.5 text-xs text-gray-500">修改后会自动保存</p>
+                <p class="mt-0.5 text-xs text-gray-500">修改后会自动保存到当前账本</p>
               </div>
-              <button type="button" class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80" @click="closeEdit">
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeEdit"
+              >
                 关闭
               </button>
             </div>
@@ -290,28 +572,44 @@
                 </div>
                 <div>
                   <label class="text-xs text-gray-600">币种</label>
-                  <select v-model="editCurrency" class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white">
-                    <option value="TWD">TWD</option>
-                    <option value="SGD">SGD</option>
-                    <option value="CNY">CNY</option>
+                  <select
+                    v-model="editCurrency"
+                    class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  >
+                    <option v-for="currency in currentLedger.currencies" :key="currency.code" :value="currency.code">
+                      {{ currency.code }}
+                    </option>
                   </select>
                 </div>
               </div>
 
               <div>
                 <label class="text-xs text-gray-600">分类</label>
-                <select v-model="editCategory" class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white">
-                  <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.emoji }} {{ c.label }}</option>
+                <select
+                  v-model="editCategory"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                >
+                  <option v-for="c in categories" :key="c.key" :value="c.key">
+                    {{ c.emoji }} {{ c.label }}
+                  </option>
                 </select>
               </div>
 
               <p v-if="editError" class="text-xs text-red-600">{{ editError }}</p>
 
               <div class="flex items-center justify-end gap-2 pt-1">
-                <button type="button" class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 active:opacity-80" @click="closeEdit">
+                <button
+                  type="button"
+                  class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 active:opacity-80"
+                  @click="closeEdit"
+                >
                   取消
                 </button>
-                <button type="button" class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm active:opacity-90" @click="saveEdit">
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm active:opacity-90"
+                  @click="saveEdit"
+                >
                   保存
                 </button>
               </div>
@@ -326,11 +624,9 @@
 
       createApp({
         setup() {
-          // ===== 配置（按需求写死在代码中） =====
-          const rates = ref({
-            sgdRate: 24.71, // 1 SGD = 24.71 TWD
-            cnyRate: 4.64, // 1 CNY = 4.64 TWD
-          });
+          const APP_STORAGE_KEY = "travel_accounting_app_v3";
+          const LEGACY_RECORDS_KEY = "tw_travel_expenses_v1";
+          const defaultRateSource = "中国银行 2026-06-15 中行折算价";
 
           const categories = [
             { key: "food", label: "餐饮", emoji: "🍜" },
@@ -340,273 +636,55 @@
             { key: "shopping", label: "伴手礼/购物", emoji: "🛍️" },
             { key: "other", label: "其他", emoji: "💡" },
           ];
-          const categoryLabelMap = Object.fromEntries(categories.map((c) => [c.key, c.label]));
 
-          // ===== 关键词分类规则 =====
           const keywordRules = [
             { key: "food", keywords: ["面线", "夜市", "吃", "饭", "奶茶", "饮料", "早餐", "午餐", "晚餐", "拉面", "火锅", "小吃", "咖啡", "茶"] },
-            { key: "transport", keywords: ["捷运", "高铁", "车", "公交", "公车", "计程车", "出租车", "打车", "uber", "火车", "台铁", "船", "机票", "机场"] },
+            { key: "transport", keywords: ["捷运", "高铁", "车", "公交", "公车", "计程车", "出租车", "打车", "uber", "火车", "台铁", "船", "机票", "机场", "地铁"] },
             { key: "hotel", keywords: ["酒店", "旅馆", "民宿", "住宿", "饭店", "hotel", "airbnb"] },
             { key: "ticket", keywords: ["门票", "票", "展", "博物馆", "动物园", "缆车", "温泉", "演唱会", "活动", "体验", "景点"] },
             { key: "shopping", keywords: ["家乐福", "凤梨酥", "伴手礼", "购物", "买", "药妆", "屈臣氏", "康是美", "免税", "特产", "纪念品"] },
           ];
 
-          // ===== 状态 =====
-          const STORAGE_KEY = "tw_travel_expenses_v1";
-          // ===== 云同步（Supabase）=====
-          // 注意：这里用的是 publishable key（sb_publishable_...），可以放在前端。
-          const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
-          const SUPABASE_URL = SUPABASE_URL_RAW.replace(/\/rest\/v1\/?$/, "");
-          const SUPABASE_ANON_KEY = "sb_publishable_s8kxnb3m4iq2Q9q495KRzg_uErnPqdo";
-          const LEDGER_KEY = "tw_travel_shared_ledger_id_v1";
+          const DEFAULT_CURRENCIES = [
+            { code: "CNY", name: "人民币", symbol: "¥", rateToCny: 1 },
+            { code: "SGD", name: "新币", symbol: "S$", rateToCny: 5.2944 },
+            { code: "MYR", name: "马币", symbol: "RM", rateToCny: 1.6754 },
+            { code: "TWD", name: "台币", symbol: "NT$", rateToCny: 0.2143 },
+            { code: "JPY", name: "日元", symbol: "¥", rateToCny: 0.042424 },
+            { code: "KRW", name: "韩元", symbol: "₩", rateToCny: 0.00448 },
+            { code: "CAD", name: "加元", symbol: "CA$", rateToCny: 4.8525 },
+            { code: "USD", name: "美元", symbol: "$", rateToCny: 6.8088 },
+            { code: "EUR", name: "欧元", symbol: "€", rateToCny: 7.8686 },
+          ];
 
-          const ledgerId = ref(localStorage.getItem(LEDGER_KEY) || "");
-          const cloudReady = ref(false);
-          const cloudError = ref("");
-          let supabaseClient = null;
-          let realtimeChannel = null;
-
-          const records = ref([]);
+          const appState = ref({ version: 3, ledgers: [], lastLedgerId: null });
           const inputText = ref("");
           const errorMsg = ref("");
           const toast = ref("");
+          const fileInputRef = ref(null);
           let toastTimer = null;
-          const selectedCurrency = ref("TWD"); // 默认以新台币记录
-          const expanded = ref(new Set(categories.map((c) => c.key))); // 默认全展开
 
-          // 编辑弹层
+          const showLedgerSheet = ref(false);
+          const showCurrencySheet = ref(false);
+          const newLedgerName = ref("");
+          const quickAddCurrencyCode = ref("");
+          const newCurrencyCode = ref("");
+          const newCurrencyName = ref("");
+          const newCurrencySymbol = ref("");
+          const newCurrencyRate = ref("");
+
           const editOpen = ref(false);
           const editingId = ref(null);
           const editDetail = ref("");
           const editAmount = ref("");
-          const editCurrency = ref("TWD");
+          const editCurrency = ref("CNY");
           const editCategory = ref("other");
           const editError = ref("");
-          const fileInputRef = ref(null);
 
           function showToast(msg) {
             toast.value = msg;
             if (toastTimer) clearTimeout(toastTimer);
-            toastTimer = setTimeout(() => (toast.value = ""), 1600);
-          }
-
-          // ===== 云同步（Supabase）工具函数 =====
-          function hasSupabaseSDK() {
-            return typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function";
-          }
-
-          function initSupabaseClient() {
-            cloudError.value = "";
-            if (!hasSupabaseSDK()) {
-              cloudReady.value = false;
-              cloudError.value = "Supabase SDK 未加载";
-              return null;
-            }
-            try {
-              // 不使用登录：纯匿名访问（RLS 策略已放开）
-              supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-                auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-              });
-              cloudReady.value = true;
-              return supabaseClient;
-            } catch (e) {
-              cloudReady.value = false;
-              cloudError.value = String(e?.message || e || "初始化失败");
-              return null;
-            }
-          }
-
-          function disconnectCloud() {
-            try {
-              if (realtimeChannel) realtimeChannel.unsubscribe();
-            } catch {
-              // ignore
-            }
-            realtimeChannel = null;
-            supabaseClient = null;
-            cloudReady.value = false;
-          }
-
-          function generateLedgerId() {
-            try {
-              const arr = new Uint8Array(16);
-              crypto.getRandomValues(arr);
-              return Array.from(arr)
-                .map((b) => b.toString(16).padStart(2, "0"))
-                .join("");
-            } catch {
-              return `${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`;
-            }
-          }
-
-          function mapDbRowToRecord(row) {
-            if (!row) return null;
-            return normalizeLegacyRecord({
-              id: row.id,
-              detail: row.detail,
-              currency: row.currency || "TWD",
-              amountOriginal: Number(row.amount_original ?? row.amountOriginal ?? 0),
-              category: row.category || "other",
-              ts: Number(row.ts || Date.now()),
-            });
-          }
-
-          async function fetchFromCloud() {
-            if (!ledgerId.value) return [];
-            const client = supabaseClient || initSupabaseClient();
-            if (!client) return [];
-            const { data, error } = await client
-              .from("expense_records")
-              .select("id, detail, currency, amount_original, category, ts")
-              .eq("ledger_id", ledgerId.value)
-              .order("ts", { ascending: false })
-              .limit(5000);
-            if (error) {
-              showToast(`云端拉取失败：${error.message}`);
-              return [];
-            }
-            return (data || []).map(mapDbRowToRecord).filter(Boolean);
-          }
-
-          async function upsertRecordsToCloud(items) {
-            if (!ledgerId.value) return;
-            const client = supabaseClient || initSupabaseClient();
-            if (!client) return;
-            const rows = (items || [])
-              .map(normalizeLegacyRecord)
-              .filter((r) => r && r.id)
-              .map((r) => ({
-                id: r.id,
-                ledger_id: ledgerId.value,
-                detail: r.detail || "",
-                currency: r.currency || "TWD",
-                amount_original: Number(r.amountOriginal ?? 0),
-                category: r.category || "other",
-                ts: Number(r.ts || Date.now()),
-                updated_at: new Date().toISOString(),
-              }));
-            if (rows.length === 0) return;
-            const { error } = await client.from("expense_records").upsert(rows, { onConflict: "id" });
-            if (error) showToast(`云端写入失败：${error.message}`);
-          }
-
-          async function deleteRecordFromCloud(id) {
-            if (!ledgerId.value || !id) return;
-            const client = supabaseClient || initSupabaseClient();
-            if (!client) return;
-            const { error } = await client.from("expense_records").delete().eq("ledger_id", ledgerId.value).eq("id", id);
-            if (error) showToast(`云端删除失败：${error.message}`);
-          }
-
-          function applyRemoteUpsert(r) {
-            if (!r || !r.id) return;
-            const idx = records.value.findIndex((x) => x.id === r.id);
-            if (idx === -1) {
-              records.value.unshift(r);
-            } else {
-              const prevTs = Number(records.value[idx]?.ts || 0);
-              const newTs = Number(r.ts || 0);
-              if (newTs >= prevTs) records.value[idx] = { ...records.value[idx], ...r };
-            }
-            records.value.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
-          }
-
-          function applyRemoteDelete(id) {
-            records.value = records.value.filter((x) => x.id !== id);
-          }
-
-          function subscribeRealtime() {
-            const client = supabaseClient || initSupabaseClient();
-            if (!client || !ledgerId.value) return;
-            try {
-              if (realtimeChannel) realtimeChannel.unsubscribe();
-            } catch {
-              // ignore
-            }
-            realtimeChannel = client
-              .channel(`ledger:${ledgerId.value}`)
-              .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "expense_records", filter: `ledger_id=eq.${ledgerId.value}` },
-                (payload) => {
-                  if (!payload) return;
-                  if (payload.eventType === "DELETE") {
-                    const id = payload.old?.id;
-                    if (id) applyRemoteDelete(id);
-                    return;
-                  }
-                  const rec = mapDbRowToRecord(payload.new);
-                  if (rec) applyRemoteUpsert(rec);
-                }
-              )
-              .subscribe((status) => {
-                if (status === "SUBSCRIBED") showToast("云端实时同步已连接");
-              });
-          }
-
-          async function connectAndSync({ askUpload = true } = {}) {
-            if (!ledgerId.value) {
-              disconnectCloud();
-              return;
-            }
-            initSupabaseClient();
-
-            // 先拉云端
-            const localBefore = [...records.value];
-            const cloudItems = await fetchFromCloud();
-
-            // 让本机先显示云端（避免重复/乱序）
-            records.value = cloudItems;
-
-            // 如本机原本有数据，提示是否合并上传到云端
-            if (askUpload && localBefore.length > 0) {
-              const cloudCount = cloudItems.length;
-              const localCount = localBefore.length;
-              const msg =
-                cloudCount === 0
-                  ? `检测到本机有 ${localCount} 条记录。\n是否上传到共享账本（让对方也能看到）？`
-                  : `云端已有 ${cloudCount} 条，本机还有 ${localCount} 条。\n是否把本机记录也合并上传到云端？`;
-              const ok = confirm(msg);
-              if (ok) {
-                await upsertRecordsToCloud(localBefore);
-                const merged = await fetchFromCloud();
-                records.value = merged;
-              }
-            }
-
-            subscribeRealtime();
-          }
-
-          async function syncNow() {
-            if (!ledgerId.value) {
-              showToast("还没设置共享账本ID");
-              return;
-            }
-            const cloudItems = await fetchFromCloud();
-            records.value = cloudItems;
-            showToast("已从云端同步");
-          }
-
-          async function openLedger() {
-            const current = ledgerId.value || "";
-            const tip = current
-              ? `当前共享账本ID：\n${current}\n\n你可以直接复制发给别人。\n\n如需更换/加入别人的账本：在下方输入新的ID。`
-              : "输入共享账本ID（别人发你的那串）。\n\n如果你想新建一个账本，留空直接点确定即可自动生成。";
-            const input = prompt(tip, current);
-            if (input === null) return; // 取消
-            const next = String(input || "").trim() || generateLedgerId();
-            ledgerId.value = next;
-            localStorage.setItem(LEDGER_KEY, next);
-
-            // 尝试复制到剪贴板（方便发给别人）
-            try {
-              if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(next);
-              showToast("已设置共享账本ID（已复制）");
-            } catch {
-              showToast("已设置共享账本ID");
-            }
-
-            await connectAndSync({ askUpload: true });
+            toastTimer = setTimeout(() => (toast.value = ""), 1800);
           }
 
           function safeParseJSON(str) {
@@ -617,68 +695,13 @@
             }
           }
 
-          function loadFromStorage() {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            const data = raw ? safeParseJSON(raw) : null;
-            if (Array.isArray(data)) records.value = data.map(normalizeLegacyRecord);
+          function createId(prefix = "id") {
+            return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
           }
 
-          function saveToStorage() {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(records.value));
-          }
-
-          function formatMoney(n, digits = 0) {
-            const num = Number(n || 0);
-            return num.toLocaleString("zh-Hans", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-          }
-
-          function currencySymbol(c) {
-            if (c === "TWD") return "NT$";
-            if (c === "SGD") return "S$";
-            if (c === "CNY") return "¥";
-            return "";
-          }
-
-          function currencyDigits(c) {
-            if (c === "TWD") return 0;
-            return 2;
-          }
-
-          function roundTo(n, digits = 2) {
+          function roundTo(n, digits = 4) {
             const p = Math.pow(10, digits);
             return Math.round((Number(n) + Number.EPSILON) * p) / p;
-          }
-
-          function normalizeLegacyRecord(r) {
-            // 兼容旧数据：如果没有币种信息，则视为 TWD
-            const currency = r.currency || "TWD";
-            const amountOriginal =
-              typeof r.amountOriginal === "number" ? r.amountOriginal : typeof r.amountTwd === "number" ? r.amountTwd : Number(r.amountTwd || 0);
-            return { ...r, currency, amountOriginal };
-          }
-
-          function getAmountTwd(r) {
-            const currency = r.currency || "TWD";
-            const amountOriginal = Number(r.amountOriginal ?? r.amountTwd ?? 0);
-            if (currency === "SGD") return roundTo(amountOriginal * rates.value.sgdRate, 2);
-            if (currency === "CNY") return roundTo(amountOriginal * rates.value.cnyRate, 2);
-            return roundTo(amountOriginal, 2);
-          }
-
-          function openEdit(item) {
-            editError.value = "";
-            editingId.value = item.id;
-            editDetail.value = String(item.detail || "");
-            editCurrency.value = item.currency || "TWD";
-            editAmount.value = String(item.amountOriginal ?? "");
-            editCategory.value = item.category || "other";
-            editOpen.value = true;
-          }
-
-          function closeEdit() {
-            editOpen.value = false;
-            editingId.value = null;
-            editError.value = "";
           }
 
           function normalizeText(s) {
@@ -686,6 +709,25 @@
               .trim()
               .replace(/[，,]+/g, " ")
               .replace(/\s+/g, " ");
+          }
+
+          function currencyDigits(code) {
+            if (["JPY", "KRW", "TWD"].includes(String(code || "").toUpperCase())) return 0;
+            return 2;
+          }
+
+          function cloneCurrency(item) {
+            const code = String(item.code || "").toUpperCase();
+            return {
+              code,
+              name: String(item.name || code),
+              symbol: String(item.symbol || code),
+              rateToCny: code === "CNY" ? 1 : Math.max(Number(item.rateToCny || 0), 0.000001),
+            };
+          }
+
+          function buildDefaultCurrencies() {
+            return DEFAULT_CURRENCIES.map(cloneCurrency);
           }
 
           function classify(detail) {
@@ -696,44 +738,199 @@
             return "other";
           }
 
-          function saveEdit() {
-            editError.value = "";
-            const id = editingId.value;
-            if (!id) return;
-
-            const detail = normalizeText(editDetail.value);
-            const finalDetail = detail || "未命名消费";
-
-            const amt = Number(editAmount.value);
-            if (!Number.isFinite(amt) || amt <= 0) {
-              editError.value = "请输入大于 0 的金额。";
-              return;
-            }
-
-            const currency = editCurrency.value || "TWD";
-            const amountOriginal = roundTo(amt, currencyDigits(currency));
-            const category = editCategory.value || classify(finalDetail);
-
-            const idx = records.value.findIndex((r) => r.id === id);
-            if (idx === -1) {
-              closeEdit();
-              return;
-            }
-
-            records.value[idx] = { ...records.value[idx], detail: finalDetail, currency, amountOriginal, category };
-            showToast("已保存");
-            if (ledgerId.value) upsertRecordsToCloud([records.value[idx]]);
-            closeEdit();
+          function normalizeLegacyRecord(item) {
+            if (!item || typeof item !== "object") return null;
+            const currency = String(item.currency || "CNY").toUpperCase();
+            const amountOriginal = Number(item.amountOriginal ?? item.amount ?? item.amountTwd ?? 0);
+            if (!Number.isFinite(amountOriginal) || amountOriginal <= 0) return null;
+            return {
+              id: item.id || createId("record"),
+              detail: String(item.detail || "未命名消费"),
+              currency,
+              amountOriginal: roundTo(amountOriginal, currencyDigits(currency)),
+              category: categories.some((c) => c.key === item.category) ? item.category : classify(item.detail),
+              ts: Number(item.ts || item.createdAt || Date.now()),
+            };
           }
 
-          function removeRecord(id) {
-            const item = records.value.find((r) => r.id === id);
-            if (!item) return;
-            const ok = confirm(`确定删除这条记录吗？\n\n${item.detail} ${currencySymbol(item.currency)} ${item.amountOriginal}`);
-            if (!ok) return;
-            records.value = records.value.filter((r) => r.id !== id);
-            showToast("已删除");
-            if (ledgerId.value) deleteRecordFromCloud(id);
+          function normalizeLedger(ledger, fallbackName = "新的旅行记账小助手") {
+            const currencies = Array.isArray(ledger?.currencies) && ledger.currencies.length
+              ? ledger.currencies.map(cloneCurrency)
+              : buildDefaultCurrencies();
+
+            if (!currencies.some((c) => c.code === "CNY")) {
+              currencies.unshift(cloneCurrency(DEFAULT_CURRENCIES[0]));
+            }
+
+            const uniqueCurrencies = [];
+            const seen = new Set();
+            currencies.forEach((c) => {
+              if (!seen.has(c.code)) {
+                seen.add(c.code);
+                uniqueCurrencies.push(c);
+              }
+            });
+
+            const selectedCurrency = uniqueCurrencies.some((c) => c.code === ledger?.selectedCurrency)
+              ? ledger.selectedCurrency
+              : "CNY";
+
+            const records = Array.isArray(ledger?.records)
+              ? ledger.records.map(normalizeLegacyRecord).filter(Boolean)
+              : [];
+
+            const collapsedCategories = Array.isArray(ledger?.collapsedCategories)
+              ? ledger.collapsedCategories.filter((key) => categories.some((c) => c.key === key))
+              : [];
+
+            return {
+              id: ledger?.id || createId("ledger"),
+              name: String(ledger?.name || fallbackName),
+              selectedCurrency,
+              currencies: uniqueCurrencies,
+              records: records.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)),
+              collapsedCategories,
+              createdAt: Number(ledger?.createdAt || Date.now()),
+            };
+          }
+
+          function createLedgerObject(name) {
+            return normalizeLedger(
+              {
+                name: name || "新的旅行记账小助手",
+                selectedCurrency: "CNY",
+                currencies: buildDefaultCurrencies(),
+                records: [],
+                collapsedCategories: [],
+              },
+              name || "新的旅行记账小助手"
+            );
+          }
+
+          function loadInitialState() {
+            const raw = localStorage.getItem(APP_STORAGE_KEY);
+            const parsed = raw ? safeParseJSON(raw) : null;
+            if (parsed && Array.isArray(parsed.ledgers) && parsed.ledgers.length) {
+              appState.value = {
+                version: 3,
+                ledgers: parsed.ledgers.map((ledger) => normalizeLedger(ledger)),
+                lastLedgerId: parsed.lastLedgerId || parsed.ledgers[0]?.id || null,
+              };
+              return;
+            }
+
+            const legacyRaw = localStorage.getItem(LEGACY_RECORDS_KEY);
+            const legacyParsed = legacyRaw ? safeParseJSON(legacyRaw) : null;
+            if (Array.isArray(legacyParsed) && legacyParsed.length) {
+              const migrated = createLedgerObject("台湾旅行记账小助手");
+              migrated.records = legacyParsed.map(normalizeLegacyRecord).filter(Boolean);
+              appState.value = { version: 3, ledgers: [migrated], lastLedgerId: migrated.id };
+              return;
+            }
+
+            const first = createLedgerObject("台湾旅行记账小助手");
+            appState.value = { version: 3, ledgers: [first], lastLedgerId: first.id };
+          }
+
+          function persistAppState() {
+            localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState.value));
+          }
+
+          const currentLedger = computed(() => {
+            const ledgers = appState.value.ledgers || [];
+            return ledgers.find((item) => item.id === appState.value.lastLedgerId) || ledgers[0] || null;
+          });
+
+          const selectedCurrencyMeta = computed(() => {
+            const ledger = currentLedger.value;
+            const fallback = cloneCurrency(DEFAULT_CURRENCIES[0]);
+            if (!ledger) return fallback;
+            return ledger.currencies.find((item) => item.code === ledger.selectedCurrency) || ledger.currencies[0] || fallback;
+          });
+
+          const sortedCurrentCurrencies = computed(() => {
+            const ledger = currentLedger.value;
+            if (!ledger) return [];
+            const selected = ledger.selectedCurrency;
+            return [...ledger.currencies].sort((a, b) => {
+              if (a.code === selected) return -1;
+              if (b.code === selected) return 1;
+              if (a.code === "CNY") return -1;
+              if (b.code === "CNY") return 1;
+              return a.code.localeCompare(b.code);
+            });
+          });
+
+          const missingDefaultCurrencies = computed(() => {
+            const ledger = currentLedger.value;
+            if (!ledger) return [];
+            const existing = new Set(ledger.currencies.map((item) => item.code));
+            return DEFAULT_CURRENCIES.filter((item) => !existing.has(item.code));
+          });
+
+          function currencySymbol(code) {
+            const upper = String(code || "").toUpperCase();
+            const ledger = currentLedger.value;
+            const found = ledger?.currencies.find((item) => item.code === upper);
+            if (found?.symbol) return found.symbol;
+            const builtin = DEFAULT_CURRENCIES.find((item) => item.code === upper);
+            return builtin?.symbol || upper;
+          }
+
+          function getRateToCny(code) {
+            const upper = String(code || "").toUpperCase();
+            if (upper === "CNY") return 1;
+            const ledger = currentLedger.value;
+            const found = ledger?.currencies.find((item) => item.code === upper);
+            return Number(found?.rateToCny || 1);
+          }
+
+          function convertToCny(amount, code) {
+            return roundTo(Number(amount || 0) * getRateToCny(code), 4);
+          }
+
+          function convertFromCny(amountCny, code) {
+            const rate = getRateToCny(code);
+            if (!rate) return 0;
+            return roundTo(Number(amountCny || 0) / rate, 4);
+          }
+
+          function getAmountCny(record) {
+            return convertToCny(record.amountOriginal, record.currency);
+          }
+
+          const totalCny = computed(() => {
+            const ledger = currentLedger.value;
+            if (!ledger) return 0;
+            return roundTo(ledger.records.reduce((sum, item) => sum + getAmountCny(item), 0), 4);
+          });
+
+          const totalInSelectedCurrency = computed(() => {
+            const selected = selectedCurrencyMeta.value?.code || "CNY";
+            return convertFromCny(totalCny.value, selected);
+          });
+
+          const grouped = computed(() => {
+            const ledger = currentLedger.value;
+            const map = {};
+            categories.forEach((c) => {
+              map[c.key] = { sumCny: 0, items: [] };
+            });
+            if (!ledger) return map;
+            ledger.records.forEach((record) => {
+              const key = map[record.category] ? record.category : "other";
+              map[key].items.push(record);
+              map[key].sumCny += getAmountCny(record);
+            });
+            return map;
+          });
+
+          function formatMoney(n, digits = 2) {
+            const num = Number(n || 0);
+            return num.toLocaleString("zh-Hans", {
+              minimumFractionDigits: digits,
+              maximumFractionDigits: digits,
+            });
           }
 
           function formatDate(ts) {
@@ -745,49 +942,340 @@
             return `${mm}/${dd} ${hh}:${mi}`;
           }
 
-          function formatDateFull(ts) {
-            const d = new Date(ts);
-            const yyyy = d.getFullYear();
-            const mm = String(d.getMonth() + 1).padStart(2, "0");
-            const dd = String(d.getDate()).padStart(2, "0");
-            const hh = String(d.getHours()).padStart(2, "0");
-            const mi = String(d.getMinutes()).padStart(2, "0");
-            return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+          function openLedgerPicker() {
+            showLedgerSheet.value = true;
           }
 
-          function createRecordId() {
-            return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+          function closeLedgerPicker() {
+            if (!currentLedger.value && appState.value.ledgers.length) return;
+            showLedgerSheet.value = false;
+          }
+
+          function enterLedger(id) {
+            appState.value.lastLedgerId = id;
+            showLedgerSheet.value = false;
+            showToast("已进入账本");
+          }
+
+          function createLedger() {
+            const name = normalizeText(newLedgerName.value) || "新的旅行记账小助手";
+            const ledger = createLedgerObject(name);
+            appState.value.ledgers.unshift(ledger);
+            appState.value.lastLedgerId = ledger.id;
+            newLedgerName.value = "";
+            showLedgerSheet.value = false;
+            showToast("已新建账本");
+          }
+
+          function renameLedgerById(id) {
+            const ledger = appState.value.ledgers.find((item) => item.id === id);
+            if (!ledger) return;
+            const next = prompt("请输入新的账本名称", ledger.name);
+            if (next === null) return;
+            const name = normalizeText(next) || ledger.name;
+            ledger.name = name;
+            showToast("账本名称已更新");
+          }
+
+          function renameCurrentLedger() {
+            if (!currentLedger.value) return;
+            renameLedgerById(currentLedger.value.id);
+          }
+
+          function deleteLedgerById(id) {
+            const ledger = appState.value.ledgers.find((item) => item.id === id);
+            if (!ledger) return;
+            const ok = confirm(`确定删除账本「${ledger.name}」吗？\n此账本内所有记录都会被删除。`);
+            if (!ok) return;
+
+            appState.value.ledgers = appState.value.ledgers.filter((item) => item.id !== id);
+            if (appState.value.ledgers.length === 0) {
+              const fresh = createLedgerObject("新的旅行记账小助手");
+              appState.value.ledgers = [fresh];
+              appState.value.lastLedgerId = fresh.id;
+            } else if (appState.value.lastLedgerId === id) {
+              appState.value.lastLedgerId = appState.value.ledgers[0].id;
+            }
+            showToast("账本已删除");
+          }
+
+          function openCurrencyManager() {
+            if (!currentLedger.value) return;
+            showCurrencySheet.value = true;
+          }
+
+          function closeCurrencyManager() {
+            showCurrencySheet.value = false;
+            quickAddCurrencyCode.value = "";
+            newCurrencyCode.value = "";
+            newCurrencyName.value = "";
+            newCurrencySymbol.value = "";
+            newCurrencyRate.value = "";
+          }
+
+          function setSelectedCurrency(code) {
+            if (!currentLedger.value) return;
+            currentLedger.value.selectedCurrency = String(code || "CNY").toUpperCase();
+          }
+
+          function updateCurrencyField(code, field, value) {
+            if (!currentLedger.value) return;
+            const item = currentLedger.value.currencies.find((c) => c.code === code);
+            if (!item) return;
+            item[field] = String(value || "").trim() || item[field];
+          }
+
+          function updateCurrencyRate(code, value) {
+            if (!currentLedger.value) return;
+            const item = currentLedger.value.currencies.find((c) => c.code === code);
+            if (!item) return;
+            if (code === "CNY") {
+              item.rateToCny = 1;
+              return;
+            }
+            const num = Number(value);
+            if (!Number.isFinite(num) || num <= 0) return;
+            item.rateToCny = roundTo(num, 6);
+          }
+
+          function addDefaultCurrency() {
+            if (!currentLedger.value || !quickAddCurrencyCode.value) return;
+            const tpl = DEFAULT_CURRENCIES.find((item) => item.code === quickAddCurrencyCode.value);
+            if (!tpl) return;
+            if (currentLedger.value.currencies.some((item) => item.code === tpl.code)) return;
+            currentLedger.value.currencies.push(cloneCurrency(tpl));
+            quickAddCurrencyCode.value = "";
+            showToast("已添加默认币种");
+          }
+
+          function addCustomCurrency() {
+            if (!currentLedger.value) return;
+            const code = String(newCurrencyCode.value || "").trim().toUpperCase();
+            const name = normalizeText(newCurrencyName.value);
+            const symbol = String(newCurrencySymbol.value || "").trim() || code;
+            const rate = Number(newCurrencyRate.value);
+
+            if (!code) {
+              showToast("请输入币种代码");
+              return;
+            }
+            if (!name) {
+              showToast("请输入币种名称");
+              return;
+            }
+            if (!Number.isFinite(rate) || rate <= 0) {
+              showToast("请输入有效汇率");
+              return;
+            }
+            if (currentLedger.value.currencies.some((item) => item.code === code)) {
+              showToast("该币种已存在");
+              return;
+            }
+
+            currentLedger.value.currencies.push({
+              code,
+              name,
+              symbol,
+              rateToCny: code === "CNY" ? 1 : roundTo(rate, 6),
+            });
+            newCurrencyCode.value = "";
+            newCurrencyName.value = "";
+            newCurrencySymbol.value = "";
+            newCurrencyRate.value = "";
+            showToast("已添加自定义币种");
+          }
+
+          function removeCurrency(code) {
+            if (!currentLedger.value) return;
+            if (code === "CNY") {
+              showToast("人民币作为基准币种，不能删除");
+              return;
+            }
+            const inUse = currentLedger.value.records.some((item) => item.currency === code);
+            if (inUse) {
+              showToast("该币种已有记录，暂不能删除");
+              return;
+            }
+            currentLedger.value.currencies = currentLedger.value.currencies.filter((item) => item.code !== code);
+            if (!currentLedger.value.currencies.some((item) => item.code === currentLedger.value.selectedCurrency)) {
+              currentLedger.value.selectedCurrency = "CNY";
+            }
+            showToast("币种已删除");
+          }
+
+          function isCategoryExpanded(key) {
+            const ledger = currentLedger.value;
+            if (!ledger) return false;
+            return !(ledger.collapsedCategories || []).includes(key);
+          }
+
+          function toggleCategory(key) {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            const list = Array.isArray(ledger.collapsedCategories) ? [...ledger.collapsedCategories] : [];
+            const idx = list.indexOf(key);
+            if (idx >= 0) list.splice(idx, 1);
+            else list.push(key);
+            ledger.collapsedCategories = list;
+          }
+
+          function parseSmartInput(raw, currency) {
+            const text = normalizeText(raw);
+            const match = text.match(/(\d+(?:\.\d+)?)/);
+            if (!match) {
+              return { ok: false, reason: "未识别到金额，请输入“消费内容 + 金额”，例如“奶茶 25”。" };
+            }
+
+            const amountInput = Number(match[1]);
+            if (!Number.isFinite(amountInput) || amountInput <= 0) {
+              return { ok: false, reason: "金额不合法，请输入大于 0 的数字。" };
+            }
+
+            const detail = normalizeText(text.replace(match[0], "").trim()) || "未命名消费";
+            return {
+              ok: true,
+              data: {
+                id: createId("record"),
+                detail,
+                currency,
+                amountOriginal: roundTo(amountInput, currencyDigits(currency)),
+                category: classify(detail),
+                ts: Date.now(),
+              },
+            };
+          }
+
+          function addFromInput() {
+            errorMsg.value = "";
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+
+            const currency = ledger.selectedCurrency || "CNY";
+            const parsed = parseSmartInput(inputText.value, currency);
+            if (!parsed.ok) {
+              errorMsg.value = parsed.reason;
+              return;
+            }
+            ledger.records.unshift(parsed.data);
+            inputText.value = "";
+            showToast("已记录");
+          }
+
+          function openEdit(item) {
+            editError.value = "";
+            editingId.value = item.id;
+            editDetail.value = String(item.detail || "");
+            editAmount.value = String(item.amountOriginal ?? "");
+            editCurrency.value = item.currency || "CNY";
+            editCategory.value = item.category || "other";
+            editOpen.value = true;
+          }
+
+          function closeEdit() {
+            editOpen.value = false;
+            editingId.value = null;
+            editError.value = "";
+          }
+
+          function saveEdit() {
+            editError.value = "";
+            const ledger = currentLedger.value;
+            if (!ledger || !editingId.value) return;
+
+            const detail = normalizeText(editDetail.value) || "未命名消费";
+            const amount = Number(editAmount.value);
+            if (!Number.isFinite(amount) || amount <= 0) {
+              editError.value = "请输入大于 0 的金额。";
+              return;
+            }
+
+            const currency = editCurrency.value || "CNY";
+            if (!ledger.currencies.some((item) => item.code === currency)) {
+              editError.value = "当前账本里没有这个币种，请先到币种设置中添加。";
+              return;
+            }
+
+            const idx = ledger.records.findIndex((item) => item.id === editingId.value);
+            if (idx === -1) {
+              closeEdit();
+              return;
+            }
+
+            ledger.records[idx] = {
+              ...ledger.records[idx],
+              detail,
+              amountOriginal: roundTo(amount, currencyDigits(currency)),
+              currency,
+              category: editCategory.value || classify(detail),
+            };
+            showToast("已保存");
+            closeEdit();
+          }
+
+          function removeRecord(id) {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            const item = ledger.records.find((r) => r.id === id);
+            if (!item) return;
+            const ok = confirm(`确定删除这条记录吗？\n\n${item.detail}\n${currencySymbol(item.currency)} ${item.amountOriginal}`);
+            if (!ok) return;
+            ledger.records = ledger.records.filter((r) => r.id !== id);
+            showToast("已删除");
+          }
+
+          function confirmClearCurrentLedger() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            if (ledger.records.length === 0) {
+              showToast("当前账本暂无记录");
+              return;
+            }
+            const ok = confirm(`确定清空「${ledger.name}」里的所有记录吗？此操作不可撤销。`);
+            if (!ok) return;
+            ledger.records = [];
+            showToast("当前账本已清空");
           }
 
           function buildExportPayload() {
             return {
-              app: "台湾旅行智能记账小助手",
-              version: 1,
+              app: "旅行记账小助手",
+              version: 3,
               exportedAt: new Date().toISOString(),
-              rates: { ...rates.value },
-              records: records.value.map((r) => ({
-                id: r.id || createRecordId(),
-                detail: String(r.detail || "未命名消费"),
-                currency: r.currency || "TWD",
-                amountOriginal: Number(r.amountOriginal ?? 0),
-                category: r.category || "other",
-                ts: Number(r.ts || Date.now()),
+              rateBase: "CNY",
+              rateSource: defaultRateSource,
+              ledgers: appState.value.ledgers.map((ledger) => ({
+                id: ledger.id,
+                name: ledger.name,
+                selectedCurrency: ledger.selectedCurrency,
+                currencies: ledger.currencies.map((currency) => ({
+                  code: currency.code,
+                  name: currency.name,
+                  symbol: currency.symbol,
+                  rateToCny: Number(currency.rateToCny),
+                })),
+                records: ledger.records.map((record) => ({
+                  id: record.id,
+                  detail: record.detail,
+                  currency: record.currency,
+                  amountOriginal: Number(record.amountOriginal),
+                  category: record.category,
+                  ts: Number(record.ts),
+                })),
+                collapsedCategories: [...(ledger.collapsedCategories || [])],
+                createdAt: Number(ledger.createdAt || Date.now()),
               })),
             };
           }
 
           function exportJson() {
-            if (records.value.length === 0) {
-              showToast("暂无可导出的记录");
-              return;
-            }
+            if (!currentLedger.value) return;
             const payload = buildExportPayload();
             const text = JSON.stringify(payload, null, 2);
             const blob = new Blob([text], { type: "application/json;charset=utf-8" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             const now = new Date();
-            const filename = `台湾旅行账单_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
+            const filename = `旅行记账数据_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
             a.href = url;
             a.download = filename;
             document.body.appendChild(a);
@@ -798,31 +1286,19 @@
           }
 
           function triggerImport() {
-            if (fileInputRef.value) fileInputRef.value.click();
+            fileInputRef.value?.click();
           }
 
-          function normalizeImportedRecord(item) {
-            if (!item || typeof item !== "object") return null;
-            const detail = normalizeText(item.detail || item.name || "");
-            const currencyRaw = String(item.currency || "TWD").toUpperCase();
-            const currency = ["TWD", "SGD", "CNY"].includes(currencyRaw) ? currencyRaw : "TWD";
-            const amountOriginal = Number(item.amountOriginal ?? item.amount ?? item.amountTwd ?? 0);
-            if (!Number.isFinite(amountOriginal) || amountOriginal <= 0) return null;
-            const category = categories.some((c) => c.key === item.category) ? item.category : classify(detail);
-            const ts = Number(item.ts || item.createdAt || Date.now());
-            return normalizeLegacyRecord({
-              id: item.id || createRecordId(),
-              detail: detail || "未命名消费",
-              currency,
-              amountOriginal: roundTo(amountOriginal, currencyDigits(currency)),
-              category,
-              ts: Number.isFinite(ts) ? ts : Date.now(),
-            });
+          function importAsSingleLedger(rawRecords, ledgerName = "导入的账本") {
+            const ledger = createLedgerObject(ledgerName);
+            ledger.records = rawRecords.map(normalizeLegacyRecord).filter(Boolean);
+            return ledger;
           }
 
           async function handleImportFile(event) {
             const file = event?.target?.files?.[0];
             if (!file) return;
+
             try {
               const text = await file.text();
               const parsed = safeParseJSON(text);
@@ -831,30 +1307,36 @@
                 return;
               }
 
-              const rawRecords = Array.isArray(parsed) ? parsed : Array.isArray(parsed.records) ? parsed.records : null;
-              if (!rawRecords) {
-                showToast("未找到可导入的记录数据");
+              let incomingLedgers = [];
+              if (Array.isArray(parsed?.ledgers)) {
+                incomingLedgers = parsed.ledgers.map((ledger) => normalizeLedger(ledger, ledger?.name || "导入的账本"));
+              } else if (Array.isArray(parsed?.records)) {
+                incomingLedgers = [importAsSingleLedger(parsed.records, parsed.ledgerName || "导入的账本")];
+              } else if (Array.isArray(parsed)) {
+                incomingLedgers = [importAsSingleLedger(parsed, "导入的账本")];
+              }
+
+              if (!incomingLedgers.length) {
+                showToast("未识别到可导入的账本数据");
                 return;
               }
 
-              const incoming = rawRecords.map(normalizeImportedRecord).filter(Boolean);
-              if (incoming.length === 0) {
-                showToast("没有可导入的有效记录");
-                return;
-              }
-
-              const ok = confirm(`检测到 ${incoming.length} 条记录，是否导入并合并到当前账本？`);
+              const ok = confirm(`检测到 ${incomingLedgers.length} 个账本，是否导入并合并到当前应用？`);
               if (!ok) return;
 
-              const map = new Map();
-              [...records.value, ...incoming].forEach((r) => {
-                if (!r?.id) return;
-                map.set(r.id, r);
+              const map = new Map(appState.value.ledgers.map((ledger) => [ledger.id, ledger]));
+              incomingLedgers.forEach((ledger) => {
+                if (map.has(ledger.id)) {
+                  ledger.id = createId("ledger");
+                }
+                map.set(ledger.id, ledger);
               });
-              records.value = Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
 
-              if (ledgerId.value) await upsertRecordsToCloud(incoming);
-              showToast(`已导入 ${incoming.length} 条记录`);
+              appState.value.ledgers = Array.from(map.values());
+              if (!currentLedger.value && appState.value.ledgers[0]) {
+                appState.value.lastLedgerId = appState.value.ledgers[0].id;
+              }
+              showToast(`已导入 ${incomingLedgers.length} 个账本`);
             } catch (e) {
               showToast(`导入失败：${e?.message || "未知错误"}`);
             } finally {
@@ -862,130 +1344,82 @@
             }
           }
 
-          // ===== 核心算法：智能解析 =====
-          function parseSmartInput(raw, currency = "TWD") {
-            const text = normalizeText(raw);
-            const match = text.match(/(\d+(?:\.\d+)?)/);
-            if (!match) return { ok: false, reason: "未识别到金额数字，请在文本里包含金额，例如“奶茶 60”。" };
-
-            const amountInput = Number(match[1]);
-            if (!Number.isFinite(amountInput) || amountInput <= 0) return { ok: false, reason: "金额不合法，请输入大于 0 的数字金额。" };
-
-            const detail = normalizeText(text.replace(match[0], "").trim());
-            const finalDetail = detail || "未命名消费";
-            const category = classify(finalDetail);
-
-            return {
-              ok: true,
-              data: {
-                id: createRecordId(),
-                detail: finalDetail,
-                currency,
-                amountOriginal: roundTo(amountInput, currencyDigits(currency)),
-                category,
-                ts: Date.now(),
-              },
-            };
-          }
-
-          function addFromInput(currency) {
-            errorMsg.value = "";
-            selectedCurrency.value = currency || selectedCurrency.value || "TWD";
-            const parsed = parseSmartInput(inputText.value, selectedCurrency.value);
-            if (!parsed.ok) {
-              errorMsg.value = parsed.reason;
-              return;
-            }
-            records.value.unshift(parsed.data);
-            inputText.value = "";
-            showToast("已记录");
-            if (ledgerId.value) upsertRecordsToCloud([parsed.data]);
-          }
-
-          function toggleCategory(key) {
-            const set = new Set(expanded.value);
-            if (set.has(key)) set.delete(key);
-            else set.add(key);
-            expanded.value = set;
-          }
-
-          async function confirmClearAll() {
-            if (records.value.length === 0) {
-              showToast("暂无可清空的记录");
-              return;
-            }
-            const ok = confirm("确定要清空所有记账记录吗？此操作不可撤销。");
-            if (!ok) return;
-            records.value = [];
-            showToast("已清空");
-            if (ledgerId.value) {
-              const okCloud = confirm("是否同时清空云端共享账本？\n（多人共享时建议选“确定”，避免对方还看到旧数据）");
-              if (okCloud) {
-                const client = supabaseClient || initSupabaseClient();
-                if (client) {
-                  const { error } = await client.from("expense_records").delete().eq("ledger_id", ledgerId.value);
-                  if (error) showToast(`云端清空失败：${error.message}`);
-                }
+          watch(
+            appState,
+            () => {
+              if (!appState.value.lastLedgerId && appState.value.ledgers[0]) {
+                appState.value.lastLedgerId = appState.value.ledgers[0].id;
               }
-            }
-          }
+              persistAppState();
+            },
+            { deep: true }
+          );
 
-          const totalTwd = computed(() => records.value.reduce((sum, r) => sum + getAmountTwd(r), 0));
-          const totalSgd = computed(() => totalTwd.value / rates.value.sgdRate);
-          const totalCny = computed(() => totalTwd.value / rates.value.cnyRate);
-
-          const grouped = computed(() => {
-            const map = {};
-            for (const c of categories) map[c.key] = { sumTwd: 0, items: [] };
-            for (const r of records.value) {
-              const key = map[r.category] ? r.category : "other";
-              map[key].items.push(r);
-              map[key].sumTwd += getAmountTwd(r);
-            }
-            return map;
-          });
-
-          watch(records, () => saveToStorage(), { deep: true });
           onMounted(() => {
-            loadFromStorage();
-            // 如果之前已经设置过共享账本ID，则自动连接云端（不弹上传提示）
-            if (ledgerId.value) connectAndSync({ askUpload: false });
+            loadInitialState();
+            if (appState.value.ledgers.length > 1) {
+              showLedgerSheet.value = true;
+            }
           });
 
           return {
-            rates,
+            appState,
             categories,
-            records,
+            defaultRateSource,
+            currentLedger,
+            selectedCurrencyMeta,
+            sortedCurrentCurrencies,
+            missingDefaultCurrencies,
             inputText,
             errorMsg,
             toast,
-            selectedCurrency,
+            fileInputRef,
+            showLedgerSheet,
+            showCurrencySheet,
+            newLedgerName,
+            quickAddCurrencyCode,
+            newCurrencyCode,
+            newCurrencyName,
+            newCurrencySymbol,
+            newCurrencyRate,
             editOpen,
             editDetail,
             editAmount,
             editCurrency,
             editCategory,
             editError,
-            fileInputRef,
-            expanded: computed(() => expanded.value),
-            grouped,
-            totalTwd,
-            totalSgd,
             totalCny,
+            totalInSelectedCurrency,
+            grouped,
             formatMoney,
             formatDate,
-            currencySymbol,
             currencyDigits,
-            getAmountTwd,
-            addFromInput,
+            currencySymbol,
+            getAmountCny,
+            convertFromCny,
+            openLedgerPicker,
+            closeLedgerPicker,
+            enterLedger,
+            createLedger,
+            renameLedgerById,
+            renameCurrentLedger,
+            deleteLedgerById,
+            openCurrencyManager,
+            closeCurrencyManager,
+            setSelectedCurrency,
+            updateCurrencyField,
+            updateCurrencyRate,
+            addDefaultCurrency,
+            addCustomCurrency,
+            removeCurrency,
+            isCategoryExpanded,
             toggleCategory,
-            confirmClearAll,
+            addFromInput,
             openEdit,
             closeEdit,
             saveEdit,
             removeRecord,
-            openLedger,
-            syncNow,
+            confirmClearCurrentLedger,
             exportJson,
             triggerImport,
             handleImportFile,
