@@ -19,6 +19,58 @@
         @change="handleImportFile"
       />
 
+      <!-- 新增：粘贴共享ID的弹窗 -->
+      <div v-if="showPasteShareIdSheet" class="fixed inset-0 z-50">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closePasteShareId"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">粘贴共享ID</p>
+                <p class="mt-0.5 text-xs text-gray-500">输入他人分享的账本ID，即可同步该账本数据</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closePasteShareId"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-4 space-y-3">
+              <div>
+                <label class="text-xs text-gray-600">共享ID</label>
+                <input
+                  v-model="pasteShareIdValue"
+                  type="text"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  placeholder="请粘贴共享ID"
+                />
+              </div>
+
+              <div class="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 active:opacity-80"
+                  @click="closePasteShareId"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm active:opacity-90"
+                  @click="confirmPasteShareId"
+                  :disabled="!pasteShareIdValue.trim()"
+                >
+                  确认同步
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <header class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur">
         <div class="mx-auto max-w-md px-4 py-3">
           <div class="flex items-start justify-between gap-3">
@@ -78,6 +130,15 @@
               :disabled="!currentLedger"
             >
               共享
+            </button>
+            <!-- 新增：粘贴共享ID按钮 -->
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openPasteShareId"
+              :disabled="!currentLedger"
+            >
+              粘贴共享ID
             </button>
             <button
               type="button"
@@ -264,10 +325,9 @@
                         {{ currencySymbol(item.currency) }}
                         {{ formatMoney(item.amountOriginal, currencyDigits(item.currency)) }}
                       </p>
+                      <!-- 修改：只保留约 ¥ 10.72，删除重复的部分 -->
                       <p class="mt-0.5 text-[11px] tabular-nums text-gray-500">
-                        约 ¥ {{ formatMoney(getAmountCny(item), 2) }} ·
-                        {{ selectedCurrencyMeta.code }}
-                        {{ formatMoney(convertFromCny(getAmountCny(item), selectedCurrencyMeta.code), currencyDigits(selectedCurrencyMeta.code)) }}
+                        约 ¥ {{ formatMoney(getAmountCny(item), 2) }}
                       </p>
                       <div class="mt-2 flex justify-end gap-2">
                         <button
@@ -564,7 +624,13 @@
             </div>
 
             <div class="mt-4 flex flex-col items-center rounded-3xl bg-gray-50 px-4 py-5">
-              <canvas ref="shareQrCanvasRef" class="rounded-2xl bg-white p-3 shadow-sm"></canvas>
+              <!-- 修复二维码加载：增加备用显示 -->
+              <div class="relative">
+                <canvas ref="shareQrCanvasRef" class="rounded-2xl bg-white p-3 shadow-sm w-[220px] h-[220px]"></canvas>
+                <div v-if="qrLoadError" class="absolute inset-0 flex items-center justify-center bg-white">
+                  <p class="text-xs text-gray-500">二维码加载失败<br/>请手动复制ID：{{ currentLedger.sharedLedgerId }}</p>
+                </div>
+              </div>
               <p class="mt-4 text-sm font-medium text-gray-900">{{ currentLedger.name }}</p>
               <p class="mt-1 break-all text-center text-xs text-gray-500">
                 共享 ID：{{ currentLedger.sharedLedgerId }}
@@ -694,8 +760,7 @@
           const defaultRateSource = "中国银行 2026-06-15 中行折算价";
           const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
           const SUPABASE_URL = SUPABASE_URL_RAW.replace(/\/rest\/v1\/?$/, "");
-          // ！！！请替换成你自己的 Supabase anon public key ！！！
-          // 路径：Supabase 后台 → Settings → API → Project API keys → anon public key
+          // ！！！已替换为你的 Supabase anon public key ！！！
           const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVvZmxlbGdhZHlkbnN2a2tyemRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3Mzc4OTYsImV4cCI6MjA5NjMxMzg5Nn0.YH05DvIW1Y_tXrBXZfYwZWj5oH7Y-x2hoM9lD3sobJE";
 
           const categories = [
@@ -755,8 +820,14 @@
           const shareQrCanvasRef = ref(null);
           const cloudReady = ref(false);
           const cloudError = ref("");
+          // 新增：二维码加载错误状态
+          const qrLoadError = ref(false);
           let supabaseClient = null;
           let realtimeChannel = null;
+
+          // 新增：粘贴共享ID相关
+          const showPasteShareIdSheet = ref(false);
+          const pasteShareIdValue = ref("");
 
           function showToast(msg) {
             toast.value = msg;
@@ -1394,22 +1465,34 @@
             }
           }
 
+          // 修复：优化二维码渲染逻辑，增加错误处理
           async function renderShareQr() {
+            qrLoadError.value = false;
             const shareId = String(currentLedger.value?.sharedLedgerId || "");
             const canvas = shareQrCanvasRef.value;
             if (!shareId || !canvas) return;
+            
+            // 清空画布
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
             if (!window.QRCode?.toCanvas) {
-              showToast("二维码组件加载失败");
+              qrLoadError.value = true;
+              showToast("二维码组件加载失败，请手动复制ID");
               return;
             }
+            
             try {
               await window.QRCode.toCanvas(canvas, shareId, {
                 width: 220,
                 margin: 1,
                 color: { dark: "#111827", light: "#ffffff" },
+                errorCorrectionLevel: 'H' // 增加纠错级别
               });
             } catch (e) {
+              qrLoadError.value = true;
               showToast(`二维码生成失败：${e?.message || "未知错误"}`);
+              console.error("二维码生成错误：", e);
             }
           }
 
@@ -1427,6 +1510,7 @@
 
           function closeShareQr() {
             showShareQrSheet.value = false;
+            qrLoadError.value = false; // 重置错误状态
           }
 
           function deleteLedgerById(id) {
@@ -1810,6 +1894,41 @@
             }
           }
 
+          // 新增：粘贴共享ID相关方法
+          function openPasteShareId() {
+            pasteShareIdValue.value = "";
+            showPasteShareIdSheet.value = true;
+          }
+
+          function closePasteShareId() {
+            showPasteShareIdSheet.value = false;
+            pasteShareIdValue.value = "";
+          }
+
+          async function confirmPasteShareId() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            
+            const shareId = pasteShareIdValue.value.trim();
+            if (!shareId) {
+              showToast("请输入有效的共享ID");
+              return;
+            }
+            
+            // 设置共享ID
+            ledger.sharedLedgerId = shareId;
+            closePasteShareId();
+            
+            try {
+              // 立即同步该共享ID的账本数据
+              await connectCurrentLedgerSync({ askUpload: false });
+              showToast(`已成功同步共享ID「${shareId}」的账本数据`);
+            } catch (err) {
+              showToast(`同步失败：${err.message}`);
+              console.error("粘贴共享ID同步错误：", err);
+            }
+          }
+
           watch(
             appState,
             () => {
@@ -1865,6 +1984,7 @@
             editError,
             showShareQrSheet,
             shareQrCanvasRef,
+            qrLoadError, // 新增：二维码错误状态
             totalCny,
             totalInSelectedCurrency,
             grouped,
@@ -1905,6 +2025,12 @@
             exportJson,
             triggerImport,
             handleImportFile,
+            // 新增：粘贴共享ID相关返回值
+            showPasteShareIdSheet,
+            pasteShareIdValue,
+            openPasteShareId,
+            closePasteShareId,
+            confirmPasteShareId,
           };
         },
       }).mount("#app");
