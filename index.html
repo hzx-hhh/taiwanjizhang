@@ -11,6 +11,13 @@
   </head>
   <body class="bg-gray-100 text-gray-900 antialiased">
     <div id="app" class="min-h-dvh pb-24">
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept=".json,application/json"
+        class="hidden"
+        @change="handleImportFile"
+      />
       <!-- 顶部标题 -->
       <header class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur">
         <div class="mx-auto max-w-md px-4 py-3">
@@ -20,6 +27,22 @@
               <p class="mt-0.5 text-xs text-gray-500">智能录入 · 自动分类 · 三币种实时换算</p>
             </div>
             <div class="flex items-center gap-2">
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="triggerImport"
+                title="导入 JSON 账单文件"
+              >
+                导入
+              </button>
+              <button
+                class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
+                type="button"
+                @click="exportJson"
+                title="导出 JSON 账单文件"
+              >
+                导出
+              </button>
               <button
                 class="text-xs text-gray-400 hover:text-gray-600 active:opacity-70"
                 type="button"
@@ -359,6 +382,7 @@
           const editCurrency = ref("TWD");
           const editCategory = ref("other");
           const editError = ref("");
+          const fileInputRef = ref(null);
 
           function showToast(msg) {
             toast.value = msg;
@@ -731,6 +755,113 @@
             return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
           }
 
+          function createRecordId() {
+            return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+          }
+
+          function buildExportPayload() {
+            return {
+              app: "台湾旅行智能记账小助手",
+              version: 1,
+              exportedAt: new Date().toISOString(),
+              rates: { ...rates.value },
+              records: records.value.map((r) => ({
+                id: r.id || createRecordId(),
+                detail: String(r.detail || "未命名消费"),
+                currency: r.currency || "TWD",
+                amountOriginal: Number(r.amountOriginal ?? 0),
+                category: r.category || "other",
+                ts: Number(r.ts || Date.now()),
+              })),
+            };
+          }
+
+          function exportJson() {
+            if (records.value.length === 0) {
+              showToast("暂无可导出的记录");
+              return;
+            }
+            const payload = buildExportPayload();
+            const text = JSON.stringify(payload, null, 2);
+            const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            const now = new Date();
+            const filename = `台湾旅行账单_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast("已导出 JSON");
+          }
+
+          function triggerImport() {
+            if (fileInputRef.value) fileInputRef.value.click();
+          }
+
+          function normalizeImportedRecord(item) {
+            if (!item || typeof item !== "object") return null;
+            const detail = normalizeText(item.detail || item.name || "");
+            const currencyRaw = String(item.currency || "TWD").toUpperCase();
+            const currency = ["TWD", "SGD", "CNY"].includes(currencyRaw) ? currencyRaw : "TWD";
+            const amountOriginal = Number(item.amountOriginal ?? item.amount ?? item.amountTwd ?? 0);
+            if (!Number.isFinite(amountOriginal) || amountOriginal <= 0) return null;
+            const category = categories.some((c) => c.key === item.category) ? item.category : classify(detail);
+            const ts = Number(item.ts || item.createdAt || Date.now());
+            return normalizeLegacyRecord({
+              id: item.id || createRecordId(),
+              detail: detail || "未命名消费",
+              currency,
+              amountOriginal: roundTo(amountOriginal, currencyDigits(currency)),
+              category,
+              ts: Number.isFinite(ts) ? ts : Date.now(),
+            });
+          }
+
+          async function handleImportFile(event) {
+            const file = event?.target?.files?.[0];
+            if (!file) return;
+            try {
+              const text = await file.text();
+              const parsed = safeParseJSON(text);
+              if (!parsed) {
+                showToast("JSON 文件格式不正确");
+                return;
+              }
+
+              const rawRecords = Array.isArray(parsed) ? parsed : Array.isArray(parsed.records) ? parsed.records : null;
+              if (!rawRecords) {
+                showToast("未找到可导入的记录数据");
+                return;
+              }
+
+              const incoming = rawRecords.map(normalizeImportedRecord).filter(Boolean);
+              if (incoming.length === 0) {
+                showToast("没有可导入的有效记录");
+                return;
+              }
+
+              const ok = confirm(`检测到 ${incoming.length} 条记录，是否导入并合并到当前账本？`);
+              if (!ok) return;
+
+              const map = new Map();
+              [...records.value, ...incoming].forEach((r) => {
+                if (!r?.id) return;
+                map.set(r.id, r);
+              });
+              records.value = Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+
+              if (ledgerId.value) await upsertRecordsToCloud(incoming);
+              showToast(`已导入 ${incoming.length} 条记录`);
+            } catch (e) {
+              showToast(`导入失败：${e?.message || "未知错误"}`);
+            } finally {
+              if (event?.target) event.target.value = "";
+            }
+          }
+
           // ===== 核心算法：智能解析 =====
           function parseSmartInput(raw, currency = "TWD") {
             const text = normalizeText(raw);
@@ -747,7 +878,7 @@
             return {
               ok: true,
               data: {
-                id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+                id: createRecordId(),
                 detail: finalDetail,
                 currency,
                 amountOriginal: roundTo(amountInput, currencyDigits(currency)),
@@ -835,6 +966,7 @@
             editCurrency,
             editCategory,
             editError,
+            fileInputRef,
             expanded: computed(() => expanded.value),
             grouped,
             totalTwd,
@@ -854,6 +986,9 @@
             removeRecord,
             openLedger,
             syncNow,
+            exportJson,
+            triggerImport,
+            handleImportFile,
           };
         },
       }).mount("#app");
