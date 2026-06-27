@@ -694,7 +694,9 @@
           const defaultRateSource = "中国银行 2026-06-15 中行折算价";
           const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
           const SUPABASE_URL = SUPABASE_URL_RAW.replace(/\/rest\/v1\/?$/, "");
-          const SUPABASE_ANON_KEY = "sb_publishable_s8kxnb3m4iq2Q9q495KRzg_uErnPqdo";
+          // ！！！请替换成你自己的 Supabase anon public key ！！！
+          // 路径：Supabase 后台 → Settings → API → Project API keys → anon public key
+          const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVvZmxlbGdhZHlkbnN2a2tyemRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3Mzc4OTYsImV4cCI6MjA5NjMxMzg5Nn0.YH05DvIW1Y_tXrBXZfYwZWj5oH7Y-x2hoM9lD3sobJE";
 
           const categories = [
             { key: "food", label: "餐饮", emoji: "🍜" },
@@ -1091,18 +1093,29 @@
           async function fetchCloudRecords(sharedId = currentSharedLedgerId()) {
             if (!sharedId) return [];
             const client = initSupabaseClient();
-            if (!client) return [];
-            const { data, error } = await client
-              .from("expense_records")
-              .select("id, detail, currency, amount_original, category, ts, updated_at")
-              .eq("ledger_id", sharedId)
-              .order("ts", { ascending: false })
-              .limit(5000);
-            if (error) {
-              showToast(`云端拉取失败：${error.message}`);
+            if (!client) {
+              showToast("Supabase客户端未初始化（检查URL/密钥）");
               return [];
             }
-            return (data || []).map(mapCloudRowToRecord).filter(Boolean);
+            
+            try {
+              const { data, error } = await client
+                .from("expense_records")
+                .select("id, detail, currency, amount_original, category, ts, updated_at")
+                .eq("ledger_id", sharedId)
+                .order("ts", { ascending: false })
+                .limit(5000);
+              
+              if (error) {
+                console.error("Supabase查询错误：", error); // 详细日志
+                throw new Error(`${error.message}（表：expense_records，条件：ledger_id=${sharedId}）`);
+              }
+              
+              return (data || []).map(mapCloudRowToRecord).filter(Boolean);
+            } catch (err) {
+              showToast(`云端拉取失败：${err.message}`);
+              return [];
+            }
           }
 
           async function upsertRecordsToCloud(records, sharedId = currentSharedLedgerId()) {
@@ -1305,20 +1318,32 @@
           async function openShareForCurrentLedger() {
             const ledger = currentLedger.value;
             if (!ledger) return;
-            const current = String(ledger.sharedLedgerId || "");
-            const tip = current
-              ? `当前共享账本 ID：\n${current}\n\n可直接复制给别人，或输入新的共享 ID 进行切换。留空则自动生成一个新的。`
-              : "输入共享账本 ID（别人发你的那串）。\n如果想新建一个共享账本，留空直接确定即可自动生成。";
-            const input = prompt(tip, current);
-            if (input === null) return;
-            const next = String(input || "").trim() || createShareLedgerId();
+            
+            // 核心修改：强制用账本自身ID作为共享ID（和expense_records表的ledger_id对应）
+            const next = ledger.id; // 不再随机生成，直接用账本ID
             ledger.sharedLedgerId = next;
+            
             try {
+              // 验证Supabase连接+查询该账本已有记录数
+              const client = initSupabaseClient();
+              if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
+              
+              const { count, error } = await client
+                .from("expense_records")
+                .select("*", { count: "exact", head: true })
+                .eq("ledger_id", next);
+              
+              if (error) throw error;
+              
+              // 复制ID+提示成功（显示记录数）
               if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(next);
-              showToast("共享账本 ID 已设置并复制");
-            } catch {
-              showToast("共享账本 ID 已设置");
+              showToast(`共享ID已设置并复制：${next}（该账本云端有${count || 0}条记录）`);
+            } catch (err) {
+              // 明确提示错误原因
+              showToast(`共享ID已设置（本地）：${next} → 云端验证失败：${err.message}`);
+              console.error("共享初始化错误：", err); // 按F12可看详细错误
             }
+            
             await connectCurrentLedgerSync({ askUpload: true });
             openShareQr();
           }
@@ -1329,11 +1354,28 @@
               showToast("当前账本还没有开启共享");
               return;
             }
-            const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
-            ledger.records = mergeRecordsByNewest(ledger.records, cloudRecords);
-            ensureLedgerCurrenciesFromRecords(ledger);
-            await upsertRecordsToCloud(ledger.records, ledger.sharedLedgerId);
-            showToast("当前账本已同步");
+            
+            try {
+              const client = initSupabaseClient();
+              if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
+              
+              // 拉取云端记录
+              const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
+              // 合并本地+云端记录
+              const mergedRecords = mergeRecordsByNewest(ledger.records, cloudRecords);
+              ledger.records = mergedRecords;
+              
+              // 确保币种存在
+              ensureLedgerCurrenciesFromRecords(ledger);
+              // 把合并后的记录写回云端
+              await upsertRecordsToCloud(mergedRecords, ledger.sharedLedgerId);
+              
+              // 明确提示同步的记录数
+              showToast(`同步成功！共加载 ${cloudRecords.length} 条云端记录，本地总计 ${mergedRecords.length} 条`);
+            } catch (err) {
+              showToast(`同步失败：${err.message}`);
+              console.error("同步错误：", err); // 按F12可看详细错误
+            }
           }
 
           async function copyCurrentShareId() {
