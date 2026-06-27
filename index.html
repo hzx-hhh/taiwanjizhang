@@ -81,11 +81,6 @@
               <p class="mt-0.5 text-xs text-gray-500">
                 多账本独立存储 · 人民币为基准 · 币种与汇率可自定义
               </p>
-              <!-- 新增：显示当前账本ID -->
-              <p v-if="currentLedger" class="mt-1 text-[10px] text-gray-400">
-                当前账本ID：{{ currentLedger.id }} 
-                <span v-if="currentLedger.sharedLedgerId">(共享ID：{{ currentLedger.sharedLedgerId }})</span>
-              </p>
             </div>
             <!-- 合并：切换账本 + 账本管理 为 账本管理 按钮 -->
             <button
@@ -118,10 +113,10 @@
             <button
               type="button"
               class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
-              @click="openShareForCurrentLedger"
+              @click="copyShareIdToClipboard"
               :disabled="!currentLedger"
             >
-              共享
+              复制共享ID
             </button>
             <button
               type="button"
@@ -384,10 +379,6 @@
                     <p class="truncate text-sm font-medium text-gray-900">{{ ledger.name }}</p>
                     <p class="mt-0.5 text-xs text-gray-500">
                       {{ ledger.records.length }} 条记录 · {{ ledger.currencies.length }} 个币种
-                    </p>
-                    <p class="mt-0.5 text-[11px] text-gray-400">
-                      账本ID：{{ ledger.id }}
-                      <span v-if="ledger.sharedLedgerId"> · 共享ID：{{ ledger.sharedLedgerId }}</span>
                     </p>
                   </div>
                   <button
@@ -1304,34 +1295,28 @@
             renameLedgerById(currentLedger.value.id);
           }
 
-          async function openShareForCurrentLedger() {
+          // 核心修改：复制共享ID到剪贴板
+          async function copyShareIdToClipboard() {
             const ledger = currentLedger.value;
             if (!ledger) return;
             
-            // 强制用账本自身ID作为共享ID
-            const next = ledger.id;
-            ledger.sharedLedgerId = next;
-            
-            try {
-              const client = initSupabaseClient();
-              if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
-              
-              const { count, error } = await client
-                .from("expense_records")
-                .select("*", { count: "exact", head: true })
-                .eq("ledger_id", next);
-              
-              if (error) throw error;
-              
-              if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(next);
-              showToast(`共享ID已设置并复制：${next}（该账本云端有${count || 0}条记录）`);
-            } catch (err) {
-              showToast(`共享ID已设置（本地）：${next} → 云端验证失败：${err.message}`);
-              console.error("共享初始化错误：", err);
+            // 如果还没有共享ID，先创建一个
+            let shareId = ledger.sharedLedgerId || ledger.id;
+            if (!ledger.sharedLedgerId) {
+              ledger.sharedLedgerId = shareId;
             }
             
-            // 移除合并确认，直接同步
-            await connectCurrentLedgerSync({ askUpload: false });
+            try {
+              // 复制到剪贴板
+              await navigator.clipboard.writeText(shareId);
+              showToast(`共享ID已复制到剪贴板：${shareId}`);
+              
+              // 自动连接同步（保持原有功能）
+              await connectCurrentLedgerSync({ askUpload: false });
+            } catch (err) {
+              showToast(`复制失败，请手动复制：${shareId}`);
+              console.error("复制剪贴板错误：", err);
+            }
           }
 
           async function syncCurrentLedgerNow() {
@@ -1841,7 +1826,7 @@
             createLedger,
             renameLedgerById,
             renameCurrentLedger,
-            openShareForCurrentLedger,
+            copyShareIdToClipboard, // 替换原来的openShareForCurrentLedger
             syncCurrentLedgerNow,
             deleteLedgerById,
             openCurrencyManager,
