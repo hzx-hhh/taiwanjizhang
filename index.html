@@ -1,499 +1,1876 @@
-import json
-import os
-import uuid
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import datetime
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>旅行记账小助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body class="bg-gray-100 text-gray-900 antialiased">
+    <div id="app" class="min-h-dvh pb-24">
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept=".json,application/json"
+        class="hidden"
+        @change="handleImportFile"
+      />
 
-# 账本数据文件路径
-DATA_FILE = "account_books.json"
-# 当前激活的账本ID
-ACTIVE_BOOK_ID = None
-# 账本数据结构
-account_books = {
-    "active_book_id": None,
-    "books": {}
-}
+      <!-- 粘贴共享ID的弹窗 -->
+      <div v-if="showPasteShareIdSheet" class="fixed inset-0 z-50">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closePasteShareId"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">粘贴共享ID</p>
+                <p class="mt-0.5 text-xs text-gray-500">输入他人分享的账本ID，即可同步该账本数据</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closePasteShareId"
+              >
+                关闭
+              </button>
+            </div>
 
-# 初始化账本数据
-def init_data():
-    global account_books, ACTIVE_BOOK_ID
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                account_books = json.load(f)
-                ACTIVE_BOOK_ID = account_books.get("active_book_id")
-                # 如果没有激活的账本，创建一个默认账本
-                if not ACTIVE_BOOK_ID or ACTIVE_BOOK_ID not in account_books["books"]:
-                    create_new_book("默认账本")
-        except Exception as e:
-            messagebox.showerror("错误", f"加载账本数据失败：{str(e)}")
-            create_new_book("默认账本")
-    else:
-        create_new_book("默认账本")
+            <div class="mt-4 space-y-3">
+              <div>
+                <label class="text-xs text-gray-600">共享ID</label>
+                <input
+                  v-model="pasteShareIdValue"
+                  type="text"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  placeholder="请粘贴共享ID"
+                />
+              </div>
 
-# 保存账本数据
-def save_data():
-    try:
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(account_books, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        messagebox.showerror("错误", f"保存账本数据失败：{str(e)}")
+              <div class="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 active:opacity-80"
+                  @click="closePasteShareId"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm active:opacity-90"
+                  @click="confirmPasteShareId"
+                  :disabled="!pasteShareIdValue.trim()"
+                >
+                  确认同步
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-# 创建新账本
-def create_new_book(book_name):
-    global ACTIVE_BOOK_ID
-    book_id = str(uuid.uuid4())
-    account_books["books"][book_id] = {
-        "name": book_name,
-        "id": book_id,
-        "records": [],
-        "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    account_books["active_book_id"] = book_id
-    ACTIVE_BOOK_ID = book_id
-    save_data()
-    update_book_list()
-    update_record_list()
-    update_book_id_display()
+      <header class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur">
+        <div class="mx-auto max-w-md px-4 py-3">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-[11px] uppercase tracking-[0.16em] text-gray-400">Travel Ledger</p>
+              <h1 class="truncate text-base font-semibold tracking-tight">
+                {{ currentLedger ? currentLedger.name : "旅行记账小助手" }}
+              </h1>
+              <p class="mt-0.5 text-xs text-gray-500">
+                多账本独立存储 · 人民币为基准 · 币种与汇率可自定义
+              </p>
+              <!-- 新增：显示当前账本ID -->
+              <p v-if="currentLedger" class="mt-1 text-[10px] text-gray-400">
+                当前账本ID：{{ currentLedger.id }} 
+                <span v-if="currentLedger.sharedLedgerId">(共享ID：{{ currentLedger.sharedLedgerId }})</span>
+              </p>
+            </div>
+            <!-- 合并：切换账本 + 账本管理 为 账本管理 按钮 -->
+            <button
+              type="button"
+              class="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 shadow-sm active:opacity-80"
+              @click="openLedgerPicker"
+            >
+              账本管理
+            </button>
+          </div>
 
-# 更新账本列表显示
-def update_book_list():
-    book_list.delete(0, tk.END)
-    for book_id, book_info in account_books["books"].items():
-        if book_id == ACTIVE_BOOK_ID:
-            book_list.insert(tk.END, f"★ {book_info['name']}")
-        else:
-            book_list.insert(tk.END, book_info['name'])
+          <div class="mt-3 flex gap-2 overflow-x-auto pb-1 text-xs text-gray-600">
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openCurrencyManager"
+              :disabled="!currentLedger"
+            >
+              币种设置
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="renameCurrentLedger"
+              :disabled="!currentLedger"
+            >
+              修改名称
+            </button>
+            <!-- 共享相关按钮相邻放置 -->
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openShareForCurrentLedger"
+              :disabled="!currentLedger"
+            >
+              共享
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openPasteShareId"
+              :disabled="!currentLedger"
+            >
+              粘贴共享ID
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="syncCurrentLedgerNow"
+              :disabled="!currentLedger || !currentLedger.sharedLedgerId"
+            >
+              同步
+            </button>
+            <!-- 导入导出JSON按钮相邻且放在末端（清空之前） -->
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="triggerImport"
+            >
+              导入 JSON
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="exportJson"
+              :disabled="!currentLedger"
+            >
+              导出 JSON
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 text-red-600 shadow-sm active:opacity-80"
+              @click="confirmClearCurrentLedger"
+              :disabled="!currentLedger"
+            >
+              清空当前账本
+            </button>
+          </div>
+        </div>
+      </header>
 
-# 更新账本ID显示
-def update_book_id_display():
-    if ACTIVE_BOOK_ID and ACTIVE_BOOK_ID in account_books["books"]:
-        book_id_label.config(text=f"当前账本ID：{ACTIVE_BOOK_ID}")
-    else:
-        book_id_label.config(text="当前账本ID：无")
+      <main v-if="currentLedger" class="mx-auto max-w-md px-4">
+        <section class="mt-4">
+          <div class="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-black/5">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium text-gray-900">智能录入</p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  当前以 {{ selectedCurrencyMeta.name }}（{{ selectedCurrencyMeta.code }}）录入
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm active:opacity-90 disabled:opacity-50"
+                :disabled="!inputText.trim()"
+                @click="addFromInput"
+              >
+                记录
+              </button>
+            </div>
 
-# 更新记录列表显示
-def update_record_list():
-    record_list.delete(0, tk.END)
-    if ACTIVE_BOOK_ID and ACTIVE_BOOK_ID in account_books["books"]:
-        records = account_books["books"][ACTIVE_BOOK_ID]["records"]
-        # 按时间倒序显示
-        for record in sorted(records, key=lambda x: x["time"], reverse=True):
-            record_type = "收入" if record["type"] == "income" else "支出"
-            record_list.insert(tk.END, 
-                f"{record['time']} | {record_type} | {record['category']} | {record['amount']}元 | {record['remark']}")
+            <label class="sr-only" for="smartInput">智能录入</label>
+            <input
+              id="smartInput"
+              v-model="inputText"
+              @keydown.enter.prevent="addFromInput"
+              class="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400 focus:border-gray-300 focus:bg-white"
+              type="text"
+              inputmode="text"
+              placeholder="例如：机票 870，奶茶 25，酒店 680"
+            />
 
-# 添加收支记录
-def add_record():
-    if not ACTIVE_BOOK_ID:
-        messagebox.showwarning("警告", "请先选择一个账本！")
-        return
-    
-    try:
-        amount = float(amount_entry.get())
-        if amount <= 0:
-            messagebox.showwarning("警告", "金额必须大于0！")
-            return
-        
-        record_type = type_var.get()
-        category = category_entry.get().strip()
-        remark = remark_entry.get().strip()
-        
-        if not category:
-            messagebox.showwarning("警告", "请输入分类！")
-            return
-        
-        record = {
-            "id": str(uuid.uuid4()),
-            "type": record_type,
-            "category": category,
-            "amount": amount,
-            "remark": remark,
-            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        account_books["books"][ACTIVE_BOOK_ID]["records"].append(record)
-        save_data()
-        update_record_list()
-        
-        # 清空输入框
-        amount_entry.delete(0, tk.END)
-        category_entry.delete(0, tk.END)
-        remark_entry.delete(0, tk.END)
-        
-        messagebox.showinfo("成功", "记录添加成功！")
-        
-    except ValueError:
-        messagebox.showerror("错误", "请输入有效的金额！")
+            <div class="mt-3">
+              <div class="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  v-for="currency in sortedCurrentCurrencies"
+                  :key="currency.code"
+                  type="button"
+                  class="whitespace-nowrap rounded-full border px-3 py-2 text-sm font-medium shadow-sm transition active:opacity-80"
+                  :class="currentLedger.selectedCurrency === currency.code
+                    ? 'border-gray-900 bg-gray-900 text-white'
+                    : 'border-gray-200 bg-white text-gray-700'"
+                  @click="setSelectedCurrency(currency.code)"
+                >
+                  {{ currency.symbol || currency.code }} {{ currency.code }}
+                </button>
+              </div>
+              <p class="mt-2 text-xs text-gray-500">
+                提示：先选币种，再输入“消费内容 + 金额”；不同账本的币种与汇率互不影响。
+              </p>
+              <p v-if="errorMsg" class="mt-2 text-xs text-red-600">{{ errorMsg }}</p>
+            </div>
+          </div>
+        </section>
 
-# 切换账本
-def switch_book(event=None):
-    global ACTIVE_BOOK_ID
-    selected_index = book_list.curselection()
-    if selected_index:
-        # 找到选中的账本ID
-        book_names = list(account_books["books"].keys())
-        for i, (book_id, book_info) in enumerate(account_books["books"].items()):
-            if i == selected_index[0]:
-                ACTIVE_BOOK_ID = book_id
-                account_books["active_book_id"] = book_id
-                save_data()
-                update_book_list()
-                update_record_list()
-                update_book_id_display()
-                break
+        <section class="mt-4">
+          <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-xs text-gray-500">总支出（人民币基准）</p>
+                <p class="mt-1 text-3xl font-semibold tabular-nums tracking-tight">
+                  ¥ {{ formatMoney(totalCny, 2) }}
+                </p>
+              </div>
+              <div class="text-right">
+                <p class="text-xs text-gray-500">当前换算</p>
+                <p class="mt-1 text-sm tabular-nums text-gray-700">
+                  {{ selectedCurrencyMeta.symbol || selectedCurrencyMeta.code }}
+                  {{ formatMoney(totalInSelectedCurrency, currencyDigits(selectedCurrencyMeta.code)) }}
+                </p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  {{ selectedCurrencyMeta.code }} · {{ currentLedger.records.length }} 条记录
+                </p>
+              </div>
+            </div>
 
-# 删除选中的记录
-def delete_record():
-    selected_index = record_list.curselection()
-    if not selected_index:
-        messagebox.showwarning("警告", "请选择要删除的记录！")
-        return
-    
-    if messagebox.askyesno("确认", "确定要删除选中的记录吗？"):
-        records = account_books["books"][ACTIVE_BOOK_ID]["records"]
-        # 按时间倒序后的索引需要转换
-        sorted_records = sorted(records, key=lambda x: x["time"], reverse=True)
-        record_id = sorted_records[selected_index[0]]["id"]
-        
-        # 找到原始记录并删除
-        for i, record in enumerate(records):
-            if record["id"] == record_id:
-                del records[i]
-                break
-        
-        save_data()
-        update_record_list()
-        messagebox.showinfo("成功", "记录删除成功！")
+            <div class="mt-3 rounded-2xl bg-gray-50 px-3 py-3">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-[11px] text-gray-500">当前账本</p>
+                  <p class="mt-1 text-xs text-gray-700">
+                    录入区只显示本账本已启用的币种
+                  </p>
+                </div>
+                <p class="text-right text-[11px] text-gray-500">
+                  {{ currentLedger.currencies.length }} 个启用币种<br />
+                  {{ currentLedger.sharedLedgerId ? "已开启共享同步" : "本地账本" }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
 
-# 账本管理窗口
-def manage_books():
-    manage_window = tk.Toplevel(root)
-    manage_window.title("账本管理")
-    manage_window.geometry("400x300")
-    manage_window.resizable(False, False)
-    
-    # 账本列表
-    list_frame = ttk.Frame(manage_window)
-    list_frame.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
-    
-    manage_book_list = tk.Listbox(list_frame, width=50, height=10)
-    manage_book_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-    scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=manage_book_list.yview)
-    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    manage_book_list.config(yscrollcommand=scrollbar.set)
-    
-    # 填充账本列表
-    for book_id, book_info in account_books["books"].items():
-        if book_id == ACTIVE_BOOK_ID:
-            manage_book_list.insert(tk.END, f"★ {book_info['name']}")
-        else:
-            manage_book_list.insert(tk.END, book_info['name'])
-    
-    # 按钮区域
-    btn_frame = ttk.Frame(manage_window)
-    btn_frame.pack(pady=10)
-    
-    # 重命名账本
-    def rename_book():
-        selected_index = manage_book_list.curselection()
-        if not selected_index:
-            messagebox.showwarning("警告", "请选择要重命名的账本！")
-            return
-        
-        # 找到选中的账本ID
-        for i, (book_id, book_info) in enumerate(account_books["books"].items()):
-            if i == selected_index[0]:
-                new_name = tk.simpledialog.askstring("重命名", "请输入新的账本名称：", initialvalue=book_info["name"])
-                if new_name and new_name.strip():
-                    account_books["books"][book_id]["name"] = new_name.strip()
-                    save_data()
-                    update_book_list()
-                    # 更新管理窗口的列表
-                    manage_book_list.delete(0, tk.END)
-                    for bid, binfo in account_books["books"].items():
-                        if bid == ACTIVE_BOOK_ID:
-                            manage_book_list.insert(tk.END, f"★ {binfo['name']}")
-                        else:
-                            manage_book_list.insert(tk.END, binfo['name'])
-                break
-    
-    # 删除账本
-    def delete_book():
-        selected_index = manage_book_list.curselection()
-        if not selected_index:
-            messagebox.showwarning("警告", "请选择要删除的账本！")
-            return
-        
-        # 找到选中的账本ID
-        book_ids = list(account_books["books"].keys())
-        selected_book_id = book_ids[selected_index[0]]
-        
-        if selected_book_id == ACTIVE_BOOK_ID:
-            messagebox.showwarning("警告", "不能删除当前正在使用的账本！")
-            return
-        
-        if len(account_books["books"]) <= 1:
-            messagebox.showwarning("警告", "至少保留一个账本！")
-            return
-        
-        if messagebox.askyesno("确认", "确定要删除选中的账本吗？此操作不可恢复！"):
-            del account_books["books"][selected_book_id]
-            save_data()
-            update_book_list()
-            # 更新管理窗口的列表
-            manage_book_list.delete(0, tk.END)
-            for bid, binfo in account_books["books"].items():
-                if bid == ACTIVE_BOOK_ID:
-                    manage_book_list.insert(tk.END, f"★ {binfo['name']}")
-                else:
-                    manage_book_list.insert(tk.END, binfo['name'])
-    
-    # 新建账本
-    def new_book():
-        book_name = tk.simpledialog.askstring("新建账本", "请输入账本名称：")
-        if book_name and book_name.strip():
-            create_new_book(book_name.strip())
-            # 更新管理窗口的列表
-            manage_book_list.delete(0, tk.END)
-            for bid, binfo in account_books["books"].items():
-                if bid == ACTIVE_BOOK_ID:
-                    manage_book_list.insert(tk.END, f"★ {binfo['name']}")
-                else:
-                    manage_book_list.insert(tk.END, binfo['name'])
-    
-    ttk.Button(btn_frame, text="新建账本", command=new_book).grid(row=0, column=0, padx=5)
-    ttk.Button(btn_frame, text="重命名", command=rename_book).grid(row=0, column=1, padx=5)
-    ttk.Button(btn_frame, text="删除账本", command=delete_book).grid(row=0, column=2, padx=5)
+        <section class="mt-4">
+          <div class="mb-2 px-1">
+            <h2 class="text-sm font-semibold text-gray-800">分类明细</h2>
+            <p class="mt-0.5 text-xs text-gray-500">
+              分类金额统一按人民币汇总，单条记录保留原始币种
+            </p>
+          </div>
 
-# 导出账本为JSON
-def export_book():
-    if not ACTIVE_BOOK_ID:
-        messagebox.showwarning("警告", "请先选择一个账本！")
-        return
-    
-    file_path = filedialog.asksaveasfilename(
-        defaultextension=".json",
-        filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")],
-        title="导出账本"
-    )
-    
-    if file_path:
-        try:
-            book_data = account_books["books"][ACTIVE_BOOK_ID]
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(book_data, f, ensure_ascii=False, indent=2)
-            messagebox.showinfo("成功", "账本导出成功！")
-        except Exception as e:
-            messagebox.showerror("错误", f"导出失败：{str(e)}")
+          <div class="space-y-3">
+            <div
+              v-for="cat in categories"
+              :key="cat.key"
+              class="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5"
+            >
+              <button
+                type="button"
+                class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left active:bg-gray-50"
+                @click="toggleCategory(cat.key)"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="text-lg">{{ cat.emoji }}</span>
+                  <div>
+                    <p class="text-sm font-medium text-gray-900">{{ cat.label }}</p>
+                    <p class="mt-0.5 text-xs text-gray-500">
+                      {{ grouped[cat.key]?.items?.length ?? 0 }} 条
+                    </p>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <p class="text-sm font-semibold tabular-nums">
+                    ¥ {{ formatMoney(grouped[cat.key]?.sumCny ?? 0, 2) }}
+                  </p>
+                  <p class="mt-0.5 text-xs text-gray-500">
+                    {{ isCategoryExpanded(cat.key) ? "收起" : "展开" }}
+                  </p>
+                </div>
+              </button>
 
-# 导入JSON账本
-def import_book():
-    file_path = filedialog.askopenfilename(
-        filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")],
-        title="导入账本"
-    )
-    
-    if file_path:
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                book_data = json.load(f)
+              <div v-if="isCategoryExpanded(cat.key)" class="border-t border-gray-100">
+                <div v-if="(grouped[cat.key]?.items?.length ?? 0) === 0" class="px-4 py-3 text-xs text-gray-500">
+                  暂无记录
+                </div>
+                <ul v-else class="divide-y divide-gray-100">
+                  <li
+                    v-for="item in grouped[cat.key].items"
+                    :key="item.id"
+                    class="flex items-start justify-between gap-3 px-4 py-3"
+                  >
+                    <div class="min-w-0">
+                      <p class="truncate text-sm text-gray-900">{{ item.detail }}</p>
+                      <p class="mt-0.5 text-xs text-gray-500">{{ formatDate(item.ts) }}</p>
+                    </div>
+                    <div class="shrink-0 text-right">
+                      <p class="text-sm font-medium tabular-nums">
+                        {{ currencySymbol(item.currency) }}
+                        {{ formatMoney(item.amountOriginal, currencyDigits(item.currency)) }}
+                      </p>
+                      <p class="mt-0.5 text-[11px] tabular-nums text-gray-500">
+                        约 ¥ {{ formatMoney(getAmountCny(item), 2) }}
+                      </p>
+                      <div class="mt-2 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 active:opacity-80"
+                          @click.stop="openEdit(item)"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 active:opacity-80"
+                          @click.stop="removeRecord(item.id)"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="h-10"></div>
+      </main>
+
+      <div
+        v-if="toast"
+        class="pointer-events-none fixed bottom-6 left-1/2 z-40 w-[calc(100%-2rem)] max-w-md -translate-x-1/2"
+      >
+        <div class="rounded-xl bg-gray-900/90 px-4 py-3 text-center text-sm text-white shadow-lg backdrop-blur">
+          {{ toast }}
+        </div>
+      </div>
+
+      <div v-if="showLedgerSheet" class="fixed inset-0 z-30">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closeLedgerPicker"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">账本管理</p>
+                <p class="mt-0.5 text-xs text-gray-500">多个行程可并存保存，彼此独立</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeLedgerPicker"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-4 max-h-[48vh] space-y-2 overflow-y-auto pr-1">
+              <div
+                v-for="ledger in appState.ledgers"
+                :key="ledger.id"
+                class="rounded-2xl border border-gray-200 bg-gray-50 p-3"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium text-gray-900">{{ ledger.name }}</p>
+                    <p class="mt-0.5 text-xs text-gray-500">
+                      {{ ledger.records.length }} 条记录 · {{ ledger.currencies.length }} 个币种
+                    </p>
+                    <p class="mt-0.5 text-[11px] text-gray-400">
+                      账本ID：{{ ledger.id }}
+                      <span v-if="ledger.sharedLedgerId"> · 共享ID：{{ ledger.sharedLedgerId }}</span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-lg bg-gray-900 px-3 py-1.5 text-xs text-white active:opacity-80"
+                    @click="enterLedger(ledger.id)"
+                  >
+                    进入
+                  </button>
+                </div>
+                <div class="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 active:opacity-80"
+                    @click="renameLedgerById(ledger.id)"
+                  >
+                    重命名
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-red-600 active:opacity-80"
+                    @click="deleteLedgerById(ledger.id)"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 rounded-2xl bg-gray-50 p-3">
+              <p class="text-sm font-medium text-gray-900">新建账本</p>
+              <div class="mt-2 flex items-center gap-2">
+                <input
+                  v-model="newLedgerName"
+                  type="text"
+                  class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                  placeholder="例如：东京旅行记账小助手"
+                />
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                  @click="createLedger"
+                >
+                  新建
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="showCurrencySheet && currentLedger" class="fixed inset-0 z-30">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closeCurrencyManager"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">币种与汇率设置</p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  人民币固定为基准；这里列出的币种，就是当前账本录入区会显示的币种
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeCurrencyManager"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-4 max-h-[42vh] space-y-3 overflow-y-auto pr-1">
+              <div class="rounded-2xl bg-gray-50 px-3 py-3">
+                <p class="text-[11px] text-gray-500">默认汇率参考</p>
+                <p class="mt-1 text-xs text-gray-700">{{ defaultRateSource }}</p>
+                <p class="mt-1 text-xs text-gray-500">汇率格式：1 单位外币 = 多少人民币（CNY）</p>
+              </div>
+              <div
+                v-for="currency in currentLedger.currencies"
+                :key="currency.code"
+                class="rounded-2xl border border-gray-200 bg-gray-50 p-3"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span class="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-700 ring-1 ring-gray-200">
+                      {{ currency.code }}
+                    </span>
+                    <p class="text-sm font-medium text-gray-900">{{ currency.name }}</p>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded-lg px-2 py-1 text-xs active:opacity-80"
+                    :class="currency.code === 'CNY'
+                      ? 'cursor-not-allowed text-gray-300'
+                      : 'text-red-600 hover:bg-red-50'"
+                    :disabled="currency.code === 'CNY'"
+                    @click="removeCurrency(currency.code)"
+                  >
+                    删除
+                  </button>
+                </div>
+
+                <div class="mt-3 grid grid-cols-3 gap-2">
+                  <div>
+                    <label class="text-[11px] text-gray-500">名称</label>
+                    <input
+                      :value="currency.name"
+                      @input="updateCurrencyField(currency.code, 'name', $event.target.value)"
+                      type="text"
+                      class="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] text-gray-500">符号</label>
+                    <input
+                      :value="currency.symbol"
+                      @input="updateCurrencyField(currency.code, 'symbol', $event.target.value)"
+                      type="text"
+                      class="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] text-gray-500">汇率（对 CNY）</label>
+                    <input
+                      :value="currency.rateToCny"
+                      @input="updateCurrencyRate(currency.code, $event.target.value)"
+                      :readonly="currency.code === 'CNY'"
+                      type="number"
+                      inputmode="decimal"
+                      step="0.0001"
+                      class="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300 read-only:bg-gray-100"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 space-y-3 rounded-2xl bg-gray-50 p-3">
+              <div>
+                <p class="text-sm font-medium text-gray-900">添加默认币种</p>
+                <div class="mt-2 flex items-center gap-2">
+                  <select
+                    v-model="quickAddCurrencyCode"
+                    class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                  >
+                    <option value="">请选择一个默认币种</option>
+                    <option
+                      v-for="item in missingDefaultCurrencies"
+                      :key="item.code"
+                      :value="item.code"
+                    >
+                      {{ item.name }}（{{ item.code }}）
+                    </option>
+                  </select>
+                  <button
+                    type="button"
+                    class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                    @click="addDefaultCurrency"
+                  >
+                    添加
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <p class="text-sm font-medium text-gray-900">新增自定义币种</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    v-model="newCurrencyCode"
+                    type="text"
+                    maxlength="10"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm uppercase outline-none focus:border-gray-300"
+                    placeholder="代码，如 THB"
+                  />
+                  <input
+                    v-model="newCurrencyName"
+                    type="text"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    placeholder="名称，如 泰铢"
+                  />
+                  <input
+                    v-model="newCurrencySymbol"
+                    type="text"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    placeholder="符号，如 ฿"
+                  />
+                  <input
+                    v-model="newCurrencyRate"
+                    type="number"
+                    inputmode="decimal"
+                    step="0.0001"
+                    class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
+                    placeholder="1 单位 = 多少 CNY"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="mt-2 w-full rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                  @click="addCustomCurrency"
+                >
+                  添加自定义币种
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="editOpen && currentLedger" class="fixed inset-0 z-40">
+        <button
+          type="button"
+          class="absolute inset-0 h-full w-full bg-black/30"
+          @click="closeEdit"
+          aria-label="关闭"
+        ></button>
+        <div class="pointer-events-none absolute inset-x-0 bottom-0">
+          <div class="pointer-events-auto mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">编辑记录</p>
+                <p class="mt-0.5 text-xs text-gray-500">修改后会自动保存到当前账本</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeEdit"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-3 space-y-3">
+              <div>
+                <label class="text-xs text-gray-600">消费详情</label>
+                <input
+                  v-model="editDetail"
+                  type="text"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  placeholder="例如：机票 / 奶茶 / 高铁票"
+                />
+              </div>
+
+              <div class="grid grid-cols-3 gap-2">
+                <div class="col-span-2">
+                  <label class="text-xs text-gray-600">金额</label>
+                  <input
+                    v-model="editAmount"
+                    type="number"
+                    inputmode="decimal"
+                    class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                    placeholder="例如：870"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs text-gray-600">币种</label>
+                  <select
+                    v-model="editCurrency"
+                    class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                  >
+                    <option v-for="currency in currentLedger.currencies" :key="currency.code" :value="currency.code">
+                      {{ currency.code }}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs text-gray-600">分类</label>
+                <select
+                  v-model="editCategory"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                >
+                  <option v-for="c in categories" :key="c.key" :value="c.key">
+                    {{ c.emoji }} {{ c.label }}
+                  </option>
+                </select>
+              </div>
+
+              <p v-if="editError" class="text-xs text-red-600">{{ editError }}</p>
+
+              <div class="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 active:opacity-80"
+                  @click="closeEdit"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm active:opacity-90"
+                  @click="saveEdit"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+
+      createApp({
+        setup() {
+          const APP_STORAGE_KEY = "travel_accounting_app_v4";
+          const LEGACY_RECORDS_KEY = "tw_travel_expenses_v1";
+          const defaultRateSource = "中国银行 2026-06-15 中行折算价";
+          const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
+          const SUPABASE_URL = SUPABASE_URL_RAW.replace(/\/rest\/v1\/?$/, "");
+          const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVvZmxlbGdhZHlkbnN2a2tyemRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3Mzc4OTYsImV4cCI6MjA5NjMxMzg5Nn0.YH05DvIW1Y_tXrBXZfYwZWj5oH7Y-x2hoM9lD3sobJE";
+
+          const categories = [
+            { key: "food", label: "餐饮", emoji: "🍜" },
+            { key: "transport", label: "交通", emoji: "🚄" },
+            { key: "hotel", label: "住宿", emoji: "🏨" },
+            { key: "ticket", label: "门票/活动", emoji: "🎟️" },
+            { key: "shopping", label: "伴手礼/购物", emoji: "🛍️" },
+            { key: "other", label: "其他", emoji: "💡" },
+          ];
+
+          const keywordRules = [
+            { key: "food", keywords: ["面线", "夜市", "吃", "饭", "奶茶", "饮料", "早餐", "午餐", "晚餐", "拉面", "火锅", "小吃", "咖啡", "茶"] },
+            { key: "transport", keywords: ["捷运", "高铁", "车", "公交", "公车", "计程车", "出租车", "打车", "uber", "火车", "台铁", "船", "机票", "机场", "地铁"] },
+            { key: "hotel", keywords: ["酒店", "旅馆", "民宿", "住宿", "饭店", "hotel", "airbnb"] },
+            { key: "ticket", keywords: ["门票", "票", "展", "博物馆", "动物园", "缆车", "温泉", "演唱会", "活动", "体验", "景点"] },
+            { key: "shopping", keywords: ["家乐福", "凤梨酥", "伴手礼", "购物", "买", "药妆", "屈臣氏", "康是美", "免税", "特产", "纪念品"] },
+          ];
+
+          const DEFAULT_CURRENCIES = [
+            { code: "CNY", name: "人民币", symbol: "¥", rateToCny: 1 },
+            { code: "SGD", name: "新币", symbol: "S$", rateToCny: 5.2944 },
+            { code: "MYR", name: "马币", symbol: "RM", rateToCny: 1.6754 },
+            { code: "THB", name: "泰铢", symbol: "฿", rateToCny: 0.2076 },
+            { code: "TWD", name: "台币", symbol: "NT$", rateToCny: 0.2143 },
+            { code: "JPY", name: "日元", symbol: "¥", rateToCny: 0.042424 },
+            { code: "KRW", name: "韩元", symbol: "₩", rateToCny: 0.00448 },
+            { code: "CAD", name: "加元", symbol: "CA$", rateToCny: 4.8525 },
+            { code: "USD", name: "美元", symbol: "$", rateToCny: 6.8088 },
+            { code: "EUR", name: "欧元", symbol: "€", rateToCny: 7.8686 },
+          ];
+
+          const appState = ref({ version: 3, ledgers: [], lastLedgerId: null });
+          const inputText = ref("");
+          const errorMsg = ref("");
+          const toast = ref("");
+          const fileInputRef = ref(null);
+          let toastTimer = null;
+
+          const showLedgerSheet = ref(false);
+          const showCurrencySheet = ref(false);
+          const newLedgerName = ref("");
+          const quickAddCurrencyCode = ref("");
+          const newCurrencyCode = ref("");
+          const newCurrencyName = ref("");
+          const newCurrencySymbol = ref("");
+          const newCurrencyRate = ref("");
+
+          const editOpen = ref(false);
+          const editingId = ref(null);
+          const editDetail = ref("");
+          const editAmount = ref("");
+          const editCurrency = ref("CNY");
+          const editCategory = ref("other");
+          const editError = ref("");
+          const cloudReady = ref(false);
+          const cloudError = ref("");
+          let supabaseClient = null;
+          let realtimeChannel = null;
+
+          // 粘贴共享ID相关
+          const showPasteShareIdSheet = ref(false);
+          const pasteShareIdValue = ref("");
+
+          function showToast(msg) {
+            toast.value = msg;
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => (toast.value = ""), 1800);
+          }
+
+          function safeParseJSON(str) {
+            try {
+              return JSON.parse(str);
+            } catch {
+              return null;
+            }
+          }
+
+          function createId(prefix = "id") {
+            return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+          }
+
+          function roundTo(n, digits = 4) {
+            const p = Math.pow(10, digits);
+            return Math.round((Number(n) + Number.EPSILON) * p) / p;
+          }
+
+          function normalizeText(s) {
+            return String(s || "")
+              .trim()
+              .replace(/[，,]+/g, " ")
+              .replace(/\s+/g, " ");
+          }
+
+          function currencyDigits(code) {
+            if (["JPY", "KRW", "TWD"].includes(String(code || "").toUpperCase())) return 0;
+            return 2;
+          }
+
+          function cloneCurrency(item) {
+            const code = String(item.code || "").toUpperCase();
+            return {
+              code,
+              name: String(item.name || code),
+              symbol: String(item.symbol || code),
+              rateToCny: code === "CNY" ? 1 : Math.max(Number(item.rateToCny || 0), 0.000001),
+            };
+          }
+
+          function buildDefaultCurrencies() {
+            return DEFAULT_CURRENCIES.map(cloneCurrency);
+          }
+
+          function buildStarterCurrencies() {
+            return [cloneCurrency(DEFAULT_CURRENCIES[0])];
+          }
+
+          function hasSupabaseSDK() {
+            return typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function";
+          }
+
+          function initSupabaseClient() {
+            cloudError.value = "";
+            if (supabaseClient) return supabaseClient;
+            if (!hasSupabaseSDK()) {
+              cloudReady.value = false;
+              cloudError.value = "Supabase SDK 未加载";
+              return null;
+            }
+            try {
+              supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+              });
+              cloudReady.value = true;
+              return supabaseClient;
+            } catch (e) {
+              cloudReady.value = false;
+              cloudError.value = String(e?.message || e || "初始化失败");
+              return null;
+            }
+          }
+
+          function disconnectCloud() {
+            try {
+              if (realtimeChannel) realtimeChannel.unsubscribe();
+            } catch {
+              // ignore
+            }
+            realtimeChannel = null;
+          }
+
+          function createShareLedgerId() {
+            try {
+              const arr = new Uint8Array(16);
+              crypto.getRandomValues(arr);
+              return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
+            } catch {
+              return createId("share");
+            }
+          }
+
+          function classify(detail) {
+            const text = String(detail || "").toLowerCase();
+            for (const rule of keywordRules) {
+              if (rule.keywords.some((k) => text.includes(String(k).toLowerCase()))) return rule.key;
+            }
+            return "other";
+          }
+
+          function normalizeLegacyRecord(item) {
+            if (!item || typeof item !== "object") return null;
+            const currency = String(item.currency || "CNY").toUpperCase();
+            const amountOriginal = Number(item.amountOriginal ?? item.amount ?? item.amountTwd ?? 0);
+            if (!Number.isFinite(amountOriginal) || amountOriginal <= 0) return null;
+            return {
+              id: item.id || createId("record"),
+              detail: String(item.detail || "未命名消费"),
+              currency,
+              amountOriginal: roundTo(amountOriginal, currencyDigits(currency)),
+              category: categories.some((c) => c.key === item.category) ? item.category : classify(item.detail),
+              ts: Number(item.ts || item.createdAt || Date.now()),
+              updatedAt: Number(item.updatedAt || item.ts || item.createdAt || Date.now()),
+            };
+          }
+
+          function normalizeLedger(ledger, fallbackName = "新的旅行记账小助手") {
+            const currencies = Array.isArray(ledger?.currencies) && ledger.currencies.length
+              ? ledger.currencies.map(cloneCurrency)
+              : buildStarterCurrencies();
+
+            if (!currencies.some((c) => c.code === "CNY")) {
+              currencies.unshift(cloneCurrency(DEFAULT_CURRENCIES[0]));
+            }
+
+            const uniqueCurrencies = [];
+            const seen = new Set();
+            currencies.forEach((c) => {
+              if (!seen.has(c.code)) {
+                seen.add(c.code);
+                uniqueCurrencies.push(c);
+              }
+            });
+
+            const selectedCurrency = uniqueCurrencies.some((c) => c.code === ledger?.selectedCurrency)
+              ? ledger.selectedCurrency
+              : "CNY";
+
+            const records = Array.isArray(ledger?.records)
+              ? ledger.records.map(normalizeLegacyRecord).filter(Boolean)
+              : [];
+
+            records.forEach((record) => {
+              if (!uniqueCurrencies.some((item) => item.code === record.currency)) {
+                const builtin = DEFAULT_CURRENCIES.find((item) => item.code === record.currency);
+                uniqueCurrencies.push(cloneCurrency(builtin || { code: record.currency, name: record.currency, symbol: record.currency, rateToCny: 1 }));
+              }
+            });
+
+            const collapsedCategories = Array.isArray(ledger?.collapsedCategories)
+              ? ledger.collapsedCategories.filter((key) => categories.some((c) => c.key === key))
+              : [];
+
+            return {
+              id: ledger?.id || createId("ledger"),
+              name: String(ledger?.name || fallbackName),
+              selectedCurrency,
+              currencies: uniqueCurrencies,
+              records: records.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)),
+              collapsedCategories,
+              sharedLedgerId: String(ledger?.sharedLedgerId || ""),
+              createdAt: Number(ledger?.createdAt || Date.now()),
+            };
+          }
+
+          function createLedgerObject(name) {
+            return normalizeLedger(
+              {
+                name: name || "新的旅行记账小助手",
+                selectedCurrency: "CNY",
+                currencies: buildStarterCurrencies(),
+                records: [],
+                collapsedCategories: [],
+                sharedLedgerId: "",
+              },
+              name || "新的旅行记账小助手"
+            );
+          }
+
+          function loadInitialState() {
+            const raw = localStorage.getItem(APP_STORAGE_KEY);
+            const parsed = raw ? safeParseJSON(raw) : null;
+            if (parsed && Array.isArray(parsed.ledgers) && parsed.ledgers.length) {
+              appState.value = {
+                version: 4,
+                ledgers: parsed.ledgers.map((ledger) => normalizeLedger(ledger)),
+                lastLedgerId: parsed.lastLedgerId || parsed.ledgers[0]?.id || null,
+              };
+              return;
+            }
+
+            const legacyRaw = localStorage.getItem(LEGACY_RECORDS_KEY);
+            const legacyParsed = legacyRaw ? safeParseJSON(legacyRaw) : null;
+            if (Array.isArray(legacyParsed) && legacyParsed.length) {
+              const migrated = createLedgerObject("台湾旅行记账小助手");
+              migrated.records = legacyParsed.map(normalizeLegacyRecord).filter(Boolean);
+              appState.value = { version: 4, ledgers: [migrated], lastLedgerId: migrated.id };
+              return;
+            }
+
+            const first = createLedgerObject("台湾旅行记账小助手");
+            appState.value = { version: 4, ledgers: [first], lastLedgerId: first.id };
+          }
+
+          function persistAppState() {
+            localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(appState.value));
+          }
+
+          const currentLedger = computed(() => {
+            const ledgers = appState.value.ledgers || [];
+            return ledgers.find((item) => item.id === appState.value.lastLedgerId) || ledgers[0] || null;
+          });
+
+          const selectedCurrencyMeta = computed(() => {
+            const ledger = currentLedger.value;
+            const fallback = cloneCurrency(DEFAULT_CURRENCIES[0]);
+            if (!ledger) return fallback;
+            return ledger.currencies.find((item) => item.code === ledger.selectedCurrency) || ledger.currencies[0] || fallback;
+          });
+
+          const sortedCurrentCurrencies = computed(() => {
+            const ledger = currentLedger.value;
+            if (!ledger) return [];
+            const selected = ledger.selectedCurrency;
+            return [...ledger.currencies].sort((a, b) => {
+              if (a.code === selected) return -1;
+              if (b.code === selected) return 1;
+              if (a.code === "CNY") return -1;
+              if (b.code === "CNY") return 1;
+              return a.code.localeCompare(b.code);
+            });
+          });
+
+          const missingDefaultCurrencies = computed(() => {
+            const ledger = currentLedger.value;
+            if (!ledger) return [];
+            const existing = new Set(ledger.currencies.map((item) => item.code));
+            return DEFAULT_CURRENCIES.filter((item) => !existing.has(item.code));
+          });
+
+          function currencySymbol(code) {
+            const upper = String(code || "").toUpperCase();
+            const ledger = currentLedger.value;
+            const found = ledger?.currencies.find((item) => item.code === upper);
+            if (found?.symbol) return found.symbol;
+            const builtin = DEFAULT_CURRENCIES.find((item) => item.code === upper);
+            return builtin?.symbol || upper;
+          }
+
+          function getRateToCny(code) {
+            const upper = String(code || "").toUpperCase();
+            if (upper === "CNY") return 1;
+            const ledger = currentLedger.value;
+            const found = ledger?.currencies.find((item) => item.code === upper);
+            return Number(found?.rateToCny || 1);
+          }
+
+          function convertToCny(amount, code) {
+            return roundTo(Number(amount || 0) * getRateToCny(code), 4);
+          }
+
+          function convertFromCny(amountCny, code) {
+            const rate = getRateToCny(code);
+            if (!rate) return 0;
+            return roundTo(Number(amountCny || 0) / rate, 4);
+          }
+
+          function getAmountCny(record) {
+            return convertToCny(record.amountOriginal, record.currency);
+          }
+
+          function ensureLedgerHasCurrency(ledger, code) {
+            if (!ledger || !code) return;
+            const upper = String(code).toUpperCase();
+            if (ledger.currencies.some((item) => item.code === upper)) return;
+            const builtin = DEFAULT_CURRENCIES.find((item) => item.code === upper);
+            ledger.currencies.push(
+              cloneCurrency(
+                builtin || {
+                  code: upper,
+                  name: upper,
+                  symbol: upper,
+                  rateToCny: 1,
+                }
+              )
+            );
+          }
+
+          function ensureLedgerCurrenciesFromRecords(ledger) {
+            if (!ledger) return;
+            (ledger.records || []).forEach((record) => ensureLedgerHasCurrency(ledger, record.currency));
+          }
+
+          function mergeRecordsByNewest(localRecords, remoteRecords) {
+            const map = new Map();
+            [...(localRecords || []), ...(remoteRecords || [])].forEach((item) => {
+              if (!item?.id) return;
+              const incoming = normalizeLegacyRecord(item);
+              if (!incoming) return;
+              const existing = map.get(incoming.id);
+              if (!existing) {
+                map.set(incoming.id, incoming);
+                return;
+              }
+              const existingUpdated = Number(existing.updatedAt || existing.ts || 0);
+              const incomingUpdated = Number(incoming.updatedAt || incoming.ts || 0);
+              map.set(incoming.id, incomingUpdated >= existingUpdated ? incoming : existing);
+            });
+            return Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+          }
+
+          function currentSharedLedgerId() {
+            return String(currentLedger.value?.sharedLedgerId || "").trim();
+          }
+
+          function mapCloudRowToRecord(row) {
+            return normalizeLegacyRecord({
+              id: row.id,
+              detail: row.detail,
+              currency: row.currency,
+              amountOriginal: row.amount_original,
+              category: row.category,
+              ts: row.ts,
+              updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : row.ts,
+            });
+          }
+
+          async function fetchCloudRecords(sharedId = currentSharedLedgerId()) {
+            if (!sharedId) return [];
+            const client = initSupabaseClient();
+            if (!client) {
+              showToast("Supabase客户端未初始化（检查URL/密钥）");
+              return [];
+            }
             
-            # 验证账本数据格式
-            if not isinstance(book_data, dict) or "name" not in book_data or "records" not in book_data:
-                messagebox.showerror("错误", "导入的文件不是有效的账本数据！")
-                return
+            try {
+              const { data, error } = await client
+                .from("expense_records")
+                .select("id, detail, currency, amount_original, category, ts, updated_at")
+                .eq("ledger_id", sharedId)
+                .order("ts", { ascending: false })
+                .limit(5000);
+              
+              if (error) {
+                console.error("Supabase查询错误：", error);
+                throw new Error(`${error.message}（表：expense_records，条件：ledger_id=${sharedId}）`);
+              }
+              
+              return (data || []).map(mapCloudRowToRecord).filter(Boolean);
+            } catch (err) {
+              showToast(`云端拉取失败：${err.message}`);
+              return [];
+            }
+          }
+
+          async function upsertRecordsToCloud(records, sharedId = currentSharedLedgerId()) {
+            if (!sharedId || !records?.length) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            const rows = records.map((item) => ({
+              id: item.id,
+              ledger_id: sharedId,
+              detail: item.detail || "",
+              currency: item.currency || "CNY",
+              amount_original: Number(item.amountOriginal || 0),
+              category: item.category || "other",
+              ts: Number(item.ts || Date.now()),
+              updated_at: new Date(Number(item.updatedAt || Date.now())).toISOString(),
+            }));
+            const { error } = await client.from("expense_records").upsert(rows, { onConflict: "id" });
+            if (error) showToast(`云端写入失败：${error.message}`);
+          }
+
+          async function deleteRecordFromCloud(recordId, sharedId = currentSharedLedgerId()) {
+            if (!sharedId || !recordId) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            const { error } = await client.from("expense_records").delete().eq("ledger_id", sharedId).eq("id", recordId);
+            if (error) showToast(`云端删除失败：${error.message}`);
+          }
+
+          async function clearSharedLedgerCloud(sharedId = currentSharedLedgerId()) {
+            if (!sharedId) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            const { error } = await client.from("expense_records").delete().eq("ledger_id", sharedId);
+            if (error) showToast(`云端清空失败：${error.message}`);
+          }
+
+          function applyRemoteUpsertToCurrentLedger(record) {
+            const ledger = currentLedger.value;
+            if (!ledger || !record?.id) return;
+            ensureLedgerHasCurrency(ledger, record.currency);
+            const idx = ledger.records.findIndex((item) => item.id === record.id);
+            if (idx === -1) {
+              ledger.records.unshift(record);
+            } else {
+              ledger.records[idx] = mergeRecordsByNewest([ledger.records[idx]], [record])[0];
+            }
+            ledger.records = [...ledger.records].sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+          }
+
+          function applyRemoteDeleteToCurrentLedger(recordId) {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            ledger.records = ledger.records.filter((item) => item.id !== recordId);
+          }
+
+          function subscribeRealtimeForCurrentLedger(sharedId = currentSharedLedgerId()) {
+            disconnectCloud();
+            if (!sharedId) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            realtimeChannel = client
+              .channel(`ledger:${sharedId}`)
+              .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "expense_records", filter: `ledger_id=eq.${sharedId}` },
+                (payload) => {
+                  if (!payload) return;
+                  if (payload.eventType === "DELETE") {
+                    const recordId = payload.old?.id;
+                    if (recordId) applyRemoteDeleteToCurrentLedger(recordId);
+                    return;
+                  }
+                  const record = mapCloudRowToRecord(payload.new);
+                  if (record) applyRemoteUpsertToCurrentLedger(record);
+                }
+              )
+              .subscribe((status) => {
+                if (status === "SUBSCRIBED") showToast("当前账本已连接共享同步");
+              });
+          }
+
+          async function connectCurrentLedgerSync({ askUpload = false } = {}) {
+            const ledger = currentLedger.value;
+            const sharedId = currentSharedLedgerId();
+            if (!ledger || !sharedId) {
+              disconnectCloud();
+              return;
+            }
+
+            const cloudRecords = await fetchCloudRecords(sharedId);
+            const localRecords = [...ledger.records];
+
+            // 移除合并确认弹窗，直接合并
+            ledger.records = mergeRecordsByNewest(localRecords, cloudRecords);
+
+            ensureLedgerCurrenciesFromRecords(ledger);
+            subscribeRealtimeForCurrentLedger(sharedId);
+          }
+
+          const totalCny = computed(() => {
+            const ledger = currentLedger.value;
+            if (!ledger) return 0;
+            return roundTo(ledger.records.reduce((sum, item) => sum + getAmountCny(item), 0), 4);
+          });
+
+          const totalInSelectedCurrency = computed(() => {
+            const selected = selectedCurrencyMeta.value?.code || "CNY";
+            return convertFromCny(totalCny.value, selected);
+          });
+
+          const grouped = computed(() => {
+            const ledger = currentLedger.value;
+            const map = {};
+            categories.forEach((c) => {
+              map[c.key] = { sumCny: 0, items: [] };
+            });
+            if (!ledger) return map;
+            ledger.records.forEach((record) => {
+              const key = map[record.category] ? record.category : "other";
+              map[key].items.push(record);
+              map[key].sumCny += getAmountCny(record);
+            });
+            return map;
+          });
+
+          function formatMoney(n, digits = 2) {
+            const num = Number(n || 0);
+            return num.toLocaleString("zh-Hans", {
+              minimumFractionDigits: digits,
+              maximumFractionDigits: digits,
+            });
+          }
+
+          function formatDate(ts) {
+            const d = new Date(ts);
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mi = String(d.getMinutes()).padStart(2, "0");
+            return `${mm}/${dd} ${hh}:${mi}`;
+          }
+
+          function openLedgerPicker() {
+            showLedgerSheet.value = true;
+          }
+
+          function closeLedgerPicker() {
+            if (!currentLedger.value && appState.value.ledgers.length) return;
+            showLedgerSheet.value = false;
+          }
+
+          function enterLedger(id) {
+            appState.value.lastLedgerId = id;
+            showLedgerSheet.value = false;
+            showToast("已进入账本");
+          }
+
+          function createLedger() {
+            const name = normalizeText(newLedgerName.value) || "新的旅行记账小助手";
+            const ledger = createLedgerObject(name);
+            appState.value.ledgers.unshift(ledger);
+            appState.value.lastLedgerId = ledger.id;
+            newLedgerName.value = "";
+            showLedgerSheet.value = false;
+            showToast("已新建账本");
+          }
+
+          function renameLedgerById(id) {
+            const ledger = appState.value.ledgers.find((item) => item.id === id);
+            if (!ledger) return;
+            const next = prompt("请输入新的账本名称", ledger.name);
+            if (next === null) return;
+            const name = normalizeText(next) || ledger.name;
+            ledger.name = name;
+            showToast("账本名称已更新");
+          }
+
+          function renameCurrentLedger() {
+            if (!currentLedger.value) return;
+            renameLedgerById(currentLedger.value.id);
+          }
+
+          async function openShareForCurrentLedger() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
             
-            # 生成新的账本ID
-            new_book_id = str(uuid.uuid4())
-            book_data["id"] = new_book_id
-            if "create_time" not in book_data:
-                book_data["create_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            // 强制用账本自身ID作为共享ID
+            const next = ledger.id;
+            ledger.sharedLedgerId = next;
             
-            account_books["books"][new_book_id] = book_data
-            save_data()
-            update_book_list()
+            try {
+              const client = initSupabaseClient();
+              if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
+              
+              const { count, error } = await client
+                .from("expense_records")
+                .select("*", { count: "exact", head: true })
+                .eq("ledger_id", next);
+              
+              if (error) throw error;
+              
+              if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(next);
+              showToast(`共享ID已设置并复制：${next}（该账本云端有${count || 0}条记录）`);
+            } catch (err) {
+              showToast(`共享ID已设置（本地）：${next} → 云端验证失败：${err.message}`);
+              console.error("共享初始化错误：", err);
+            }
             
-            messagebox.showinfo("成功", f"账本「{book_data['name']}」导入成功！")
-        except Exception as e:
-            messagebox.showerror("错误", f"导入失败：{str(e)}")
+            // 移除合并确认，直接同步
+            await connectCurrentLedgerSync({ askUpload: false });
+          }
 
-# 共享账本（简化版，直接复制ID到剪贴板）
-def share_book():
-    if not ACTIVE_BOOK_ID:
-        messagebox.showwarning("警告", "请先选择一个账本！")
-        return
-    
-    # 直接复制账本ID到剪贴板
-    root.clipboard_clear()
-    root.clipboard_append(ACTIVE_BOOK_ID)
-    root.update()  # 保持剪贴板内容
-    
-    messagebox.showinfo("成功", f"账本ID已复制到剪贴板：\n{ACTIVE_BOOK_ID}")
+          async function syncCurrentLedgerNow() {
+            const ledger = currentLedger.value;
+            if (!ledger?.sharedLedgerId) {
+              showToast("当前账本还没有开启共享");
+              return;
+            }
+            
+            try {
+              const client = initSupabaseClient();
+              if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
+              
+              const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
+              const mergedRecords = mergeRecordsByNewest(ledger.records, cloudRecords);
+              ledger.records = mergedRecords;
+              
+              ensureLedgerCurrenciesFromRecords(ledger);
+              await upsertRecordsToCloud(mergedRecords, ledger.sharedLedgerId);
+              
+              showToast(`同步成功！共加载 ${cloudRecords.length} 条云端记录，本地总计 ${mergedRecords.length} 条`);
+            } catch (err) {
+              showToast(`同步失败：${err.message}`);
+              console.error("同步错误：", err);
+            }
+          }
 
-# 粘贴共享ID并同步账本
-def paste_share_id():
-    share_id = tk.simpledialog.askstring("同步账本", "请粘贴共享ID：")
-    if not share_id:
-        return
-    
-    share_id = share_id.strip()
-    if share_id == ACTIVE_BOOK_ID:
-        messagebox.showinfo("提示", "这是当前正在使用的账本ID！")
-        return
-    
-    if share_id in account_books["books"]:
-        # 切换到该账本
-        global ACTIVE_BOOK_ID
-        ACTIVE_BOOK_ID = share_id
-        account_books["active_book_id"] = share_id
-        save_data()
-        update_book_list()
-        update_record_list()
-        update_book_id_display()
-        messagebox.showinfo("成功", f"已切换到共享账本：{account_books['books'][share_id]['name']}")
-    else:
-        messagebox.showwarning("警告", "未找到该ID对应的账本！")
+          function deleteLedgerById(id) {
+            const ledger = appState.value.ledgers.find((item) => item.id === id);
+            if (!ledger) return;
+            const ok = confirm(`确定删除账本「${ledger.name}」吗？\n此账本内所有记录都会被删除。`);
+            if (!ok) return;
 
-# 同步账本（简化版，仅检查是否有更新）
-def sync_book():
-    if not ACTIVE_BOOK_ID:
-        messagebox.showwarning("警告", "请先选择一个账本！")
-        return
-    
-    # 实际应用中这里应该是网络同步逻辑
-    # 这里简化为提示同步完成
-    messagebox.showinfo("同步完成", "账本同步检查完成！\n当前账本ID：" + ACTIVE_BOOK_ID)
+            appState.value.ledgers = appState.value.ledgers.filter((item) => item.id !== id);
+            if (appState.value.ledgers.length === 0) {
+              const fresh = createLedgerObject("新的旅行记账小助手");
+              appState.value.ledgers = [fresh];
+              appState.value.lastLedgerId = fresh.id;
+            } else if (appState.value.lastLedgerId === id) {
+              appState.value.lastLedgerId = appState.value.ledgers[0].id;
+            }
+            showToast("账本已删除");
+          }
 
-# 清空当前账本数据
-def clear_book_data():
-    if not ACTIVE_BOOK_ID:
-        messagebox.showwarning("警告", "请先选择一个账本！")
-        return
-    
-    if messagebox.askyesno("确认", "确定要清空当前账本的所有记录吗？此操作不可恢复！"):
-        account_books["books"][ACTIVE_BOOK_ID]["records"] = []
-        save_data()
-        update_record_list()
-        messagebox.showinfo("成功", "账本记录已清空！")
+          function openCurrencyManager() {
+            if (!currentLedger.value) return;
+            showCurrencySheet.value = true;
+          }
 
-# 创建主窗口
-root = tk.Tk()
-root.title("简易账本管理系统")
-root.geometry("800x600")
-root.resizable(True, True)
+          function closeCurrencyManager() {
+            showCurrencySheet.value = false;
+            quickAddCurrencyCode.value = "";
+            newCurrencyCode.value = "";
+            newCurrencyName.value = "";
+            newCurrencySymbol.value = "";
+            newCurrencyRate.value = "";
+          }
 
-# 导入tkinter.simpledialog（用于输入框）
-import tkinter.simpledialog as simpledialog
+          function setSelectedCurrency(code) {
+            if (!currentLedger.value) return;
+            currentLedger.value.selectedCurrency = String(code || "CNY").toUpperCase();
+          }
 
-# 主框架
-main_frame = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
-main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+          function updateCurrencyField(code, field, value) {
+            if (!currentLedger.value) return;
+            const item = currentLedger.value.currencies.find((c) => c.code === code);
+            if (!item) return;
+            item[field] = String(value || "").trim() || item[field];
+          }
 
-# 左侧账本列表区域
-left_frame = ttk.Frame(main_frame, width=200)
-main_frame.add(left_frame, weight=1)
+          function updateCurrencyRate(code, value) {
+            if (!currentLedger.value) return;
+            const item = currentLedger.value.currencies.find((c) => c.code === code);
+            if (!item) return;
+            if (code === "CNY") {
+              item.rateToCny = 1;
+              return;
+            }
+            const num = Number(value);
+            if (!Number.isFinite(num) || num <= 0) return;
+            item.rateToCny = roundTo(num, 6);
+          }
 
-# 账本列表标题
-ttk.Label(left_frame, text="账本列表", font=("Arial", 12, "bold")).pack(pady=5)
+          function addDefaultCurrency() {
+            if (!currentLedger.value || !quickAddCurrencyCode.value) return;
+            const tpl = DEFAULT_CURRENCIES.find((item) => item.code === quickAddCurrencyCode.value);
+            if (!tpl) return;
+            if (currentLedger.value.currencies.some((item) => item.code === tpl.code)) return;
+            currentLedger.value.currencies.push(cloneCurrency(tpl));
+            quickAddCurrencyCode.value = "";
+            showToast("已添加默认币种");
+          }
 
-# 账本列表
-book_list_frame = ttk.Frame(left_frame)
-book_list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+          function addCustomCurrency() {
+            if (!currentLedger.value) return;
+            const code = String(newCurrencyCode.value || "").trim().toUpperCase();
+            const name = normalizeText(newCurrencyName.value);
+            const symbol = String(newCurrencySymbol.value || "").trim() || code;
+            const rate = Number(newCurrencyRate.value);
 
-book_list = tk.Listbox(book_list_frame)
-book_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-book_list_scroll = ttk.Scrollbar(book_list_frame, orient=tk.VERTICAL, command=book_list.yview)
-book_list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-book_list.config(yscrollcommand=book_list_scroll.set)
-book_list.bind('<Double-Button-1>', switch_book)
+            if (!code) {
+              showToast("请输入币种代码");
+              return;
+            }
+            if (!name) {
+              showToast("请输入币种名称");
+              return;
+            }
+            if (!Number.isFinite(rate) || rate <= 0) {
+              showToast("请输入有效汇率");
+              return;
+            }
+            if (currentLedger.value.currencies.some((item) => item.code === code)) {
+              showToast("该币种已存在");
+              return;
+            }
 
-# 账本ID显示
-book_id_label = ttk.Label(left_frame, text="当前账本ID：无", font=("Arial", 9), foreground="gray")
-book_id_label.pack(pady=5, padx=5, anchor=tk.W)
+            currentLedger.value.currencies.push({
+              code,
+              name,
+              symbol,
+              rateToCny: code === "CNY" ? 1 : roundTo(rate, 6),
+            });
+            newCurrencyCode.value = "";
+            newCurrencyName.value = "";
+            newCurrencySymbol.value = "";
+            newCurrencyRate.value = "";
+            showToast("已添加自定义币种");
+          }
 
-# 账本管理按钮
-ttk.Button(left_frame, text="账本管理", command=manage_books).pack(pady=5, fill=tk.X, padx=5)
+          function removeCurrency(code) {
+            if (!currentLedger.value) return;
+            if (code === "CNY") {
+              showToast("人民币作为基准币种，不能删除");
+              return;
+            }
+            const inUse = currentLedger.value.records.some((item) => item.currency === code);
+            if (inUse) {
+              showToast("该币种已有记录，暂不能删除");
+              return;
+            }
+            currentLedger.value.currencies = currentLedger.value.currencies.filter((item) => item.code !== code);
+            if (!currentLedger.value.currencies.some((item) => item.code === currentLedger.value.selectedCurrency)) {
+              currentLedger.value.selectedCurrency = "CNY";
+            }
+            showToast("币种已删除");
+          }
 
-# 右侧操作区域
-right_frame = ttk.Frame(main_frame)
-main_frame.add(right_frame, weight=3)
+          function isCategoryExpanded(key) {
+            const ledger = currentLedger.value;
+            if (!ledger) return false;
+            return !(ledger.collapsedCategories || []).includes(key);
+          }
 
-# 记录列表区域
-record_frame = ttk.LabelFrame(right_frame, text="收支记录")
-record_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+          function toggleCategory(key) {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            const list = Array.isArray(ledger.collapsedCategories) ? [...ledger.collapsedCategories] : [];
+            const idx = list.indexOf(key);
+            if (idx >= 0) list.splice(idx, 1);
+            else list.push(key);
+            ledger.collapsedCategories = list;
+          }
 
-record_list_frame = ttk.Frame(record_frame)
-record_list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+          function parseSmartInput(raw, currency) {
+            const text = normalizeText(raw);
+            const match = text.match(/(\d+(?:\.\d+)?)/);
+            if (!match) {
+              return { ok: false, reason: "未识别到金额，请输入“消费内容 + 金额”，例如“奶茶 25”。" };
+            }
 
-record_list = tk.Listbox(record_list_frame)
-record_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-record_list_scroll = ttk.Scrollbar(record_list_frame, orient=tk.VERTICAL, command=record_list.yview)
-record_list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-record_list.config(yscrollcommand=record_list_scroll.set)
+            const amountInput = Number(match[1]);
+            if (!Number.isFinite(amountInput) || amountInput <= 0) {
+              return { ok: false, reason: "金额不合法，请输入大于 0 的数字。" };
+            }
 
-# 添加记录区域
-add_frame = ttk.LabelFrame(right_frame, text="添加收支")
-add_frame.pack(fill=tk.X, padx=5, pady=5)
+            const detail = normalizeText(text.replace(match[0], "").trim()) || "未命名消费";
+            return {
+              ok: true,
+              data: {
+                id: createId("record"),
+                detail,
+                currency,
+                amountOriginal: roundTo(amountInput, currencyDigits(currency)),
+                category: classify(detail),
+                ts: Date.now(),
+                updatedAt: Date.now(),
+              },
+            };
+          }
 
-# 表单布局
-form_frame = ttk.Frame(add_frame)
-form_frame.pack(padx=10, pady=10, fill=tk.X)
+          function addFromInput() {
+            errorMsg.value = "";
+            const ledger = currentLedger.value;
+            if (!ledger) return;
 
-# 金额
-ttk.Label(form_frame, text="金额：").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-amount_entry = ttk.Entry(form_frame)
-amount_entry.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=3)
-amount_entry.insert(0, "0.00")
+            const currency = ledger.selectedCurrency || "CNY";
+            const parsed = parseSmartInput(inputText.value, currency);
+            if (!parsed.ok) {
+              errorMsg.value = parsed.reason;
+              return;
+            }
+            ledger.records.unshift(parsed.data);
+            inputText.value = "";
+            showToast("已记录");
+            if (ledger.sharedLedgerId) upsertRecordsToCloud([parsed.data], ledger.sharedLedgerId);
+          }
 
-# 类型
-ttk.Label(form_frame, text="类型：").grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
-type_var = tk.StringVar(value="income")
-ttk.Radiobutton(form_frame, text="收入", variable=type_var, value="income").grid(row=0, column=3, padx=5, pady=3)
-ttk.Radiobutton(form_frame, text="支出", variable=type_var, value="expense").grid(row=0, column=4, padx=5, pady=3)
+          function openEdit(item) {
+            editError.value = "";
+            editingId.value = item.id;
+            editDetail.value = String(item.detail || "");
+            editAmount.value = String(item.amountOriginal ?? "");
+            editCurrency.value = item.currency || "CNY";
+            editCategory.value = item.category || "other";
+            editOpen.value = true;
+          }
 
-# 分类
-ttk.Label(form_frame, text="分类：").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-category_entry = ttk.Entry(form_frame)
-category_entry.grid(row=1, column=1, columnspan=4, sticky=tk.EW, padx=5, pady=3)
-category_entry.insert(0, "日常消费")
+          function closeEdit() {
+            editOpen.value = false;
+            editingId.value = null;
+            editError.value = "";
+          }
 
-# 备注
-ttk.Label(form_frame, text="备注：").grid(row=2, column=0, sticky=tk.W, padx=5, pady=3)
-remark_entry = ttk.Entry(form_frame)
-remark_entry.grid(row=2, column=1, columnspan=4, sticky=tk.EW, padx=5, pady=3)
+          function saveEdit() {
+            editError.value = "";
+            const ledger = currentLedger.value;
+            if (!ledger || !editingId.value) return;
 
-# 添加按钮
-ttk.Button(form_frame, text="添加记录", command=add_record).grid(row=3, column=0, columnspan=5, pady=10)
+            const detail = normalizeText(editDetail.value) || "未命名消费";
+            const amount = Number(editAmount.value);
+            if (!Number.isFinite(amount) || amount <= 0) {
+              editError.value = "请输入大于 0 的金额。";
+              return;
+            }
 
-# 按钮操作区域
-btn_frame = ttk.Frame(right_frame)
-btn_frame.pack(fill=tk.X, padx=5, pady=5)
+            const currency = editCurrency.value || "CNY";
+            if (!ledger.currencies.some((item) => item.code === currency)) {
+              editError.value = "当前账本里没有这个币种，请先到币种设置中添加。";
+              return;
+            }
 
-# 第一行按钮 - 常用操作
-ttk.Button(btn_frame, text="删除选中记录", command=delete_record).grid(row=0, column=0, padx=5, pady=3)
+            const idx = ledger.records.findIndex((item) => item.id === editingId.value);
+            if (idx === -1) {
+              closeEdit();
+              return;
+            }
 
-# 共享相关按钮（相邻放置）
-ttk.Button(btn_frame, text="共享账本", command=share_book).grid(row=0, column=1, padx=5, pady=3)
-ttk.Button(btn_frame, text="粘贴共享ID", command=paste_share_id).grid(row=0, column=2, padx=5, pady=3)
-ttk.Button(btn_frame, text="同步账本", command=sync_book).grid(row=0, column=3, padx=5, pady=3)
+            ledger.records[idx] = {
+              ...ledger.records[idx],
+              detail,
+              amountOriginal: roundTo(amount, currencyDigits(currency)),
+              currency,
+              category: editCategory.value || classify(detail),
+              updatedAt: Date.now(),
+            };
+            showToast("已保存");
+            if (ledger.sharedLedgerId) upsertRecordsToCloud([ledger.records[idx]], ledger.sharedLedgerId);
+            closeEdit();
+          }
 
-# 导出导入按钮（相邻放置，在末端，清空数据之前）
-ttk.Button(btn_frame, text="导出JSON", command=export_book).grid(row=0, column=4, padx=5, pady=3)
-ttk.Button(btn_frame, text="导入JSON", command=import_book).grid(row=0, column=5, padx=5, pady=3)
+          function removeRecord(id) {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            const item = ledger.records.find((r) => r.id === id);
+            if (!item) return;
+            const ok = confirm(`确定删除这条记录吗？\n\n${item.detail}\n${currencySymbol(item.currency)} ${item.amountOriginal}`);
+            if (!ok) return;
+            ledger.records = ledger.records.filter((r) => r.id !== id);
+            showToast("已删除");
+            if (ledger.sharedLedgerId) deleteRecordFromCloud(id, ledger.sharedLedgerId);
+          }
 
-# 清空数据按钮（最后一个）
-ttk.Button(btn_frame, text="清空账本数据", command=clear_book_data, style="Accent.TButton").grid(row=0, column=6, padx=5, pady=3)
+          async function confirmClearCurrentLedger() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            if (ledger.records.length === 0) {
+              showToast("当前账本暂无记录");
+              return;
+            }
+            const ok = confirm(`确定清空「${ledger.name}」里的所有记录吗？此操作不可撤销。`);
+            if (!ok) return;
+            ledger.records = [];
+            showToast("当前账本已清空");
+            if (ledger.sharedLedgerId) {
+              const clearCloud = confirm("是否同时清空这个共享账本的云端记录？");
+              if (clearCloud) await clearSharedLedgerCloud(ledger.sharedLedgerId);
+            }
+          }
 
-# 配置列权重
-form_frame.columnconfigure(1, weight=1)
-form_frame.columnconfigure(4, weight=1)
-btn_frame.columnconfigure(6, weight=1)
+          function buildExportPayload() {
+            return {
+              app: "旅行记账小助手",
+              version: 4,
+              exportedAt: new Date().toISOString(),
+              rateBase: "CNY",
+              rateSource: defaultRateSource,
+              ledgers: appState.value.ledgers.map((ledger) => ({
+                id: ledger.id,
+                name: ledger.name,
+                selectedCurrency: ledger.selectedCurrency,
+                sharedLedgerId: ledger.sharedLedgerId || "",
+                currencies: ledger.currencies.map((currency) => ({
+                  code: currency.code,
+                  name: currency.name,
+                  symbol: currency.symbol,
+                  rateToCny: Number(currency.rateToCny),
+                })),
+                records: ledger.records.map((record) => ({
+                  id: record.id,
+                  detail: record.detail,
+                  currency: record.currency,
+                  amountOriginal: Number(record.amountOriginal),
+                  category: record.category,
+                  ts: Number(record.ts),
+                  updatedAt: Number(record.updatedAt || record.ts || Date.now()),
+                })),
+                collapsedCategories: [...(ledger.collapsedCategories || [])],
+                createdAt: Number(ledger.createdAt || Date.now()),
+              })),
+            };
+          }
 
-# 初始化
-init_data()
+          function exportJson() {
+            if (!currentLedger.value) return;
+            const payload = buildExportPayload();
+            const text = JSON.stringify(payload, null, 2);
+            const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            const now = new Date();
+            const filename = `旅行记账数据_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast("已导出 JSON");
+          }
 
-# 启动主循环
-root.mainloop()
+          function triggerImport() {
+            fileInputRef.value?.click();
+          }
+
+          function importAsSingleLedger(rawRecords, ledgerName = "导入的账本") {
+            return normalizeLedger(
+              {
+                name: ledgerName,
+                selectedCurrency: "CNY",
+                currencies: [],
+                records: rawRecords.map(normalizeLegacyRecord).filter(Boolean),
+                collapsedCategories: [],
+                sharedLedgerId: "",
+              },
+              ledgerName
+            );
+          }
+
+          async function handleImportFile(event) {
+            const file = event?.target?.files?.[0];
+            if (!file) return;
+
+            try {
+              const text = await file.text();
+              const parsed = safeParseJSON(text);
+              if (!parsed) {
+                showToast("JSON 文件格式不正确");
+                return;
+              }
+
+              let incomingLedgers = [];
+              if (Array.isArray(parsed?.ledgers)) {
+                incomingLedgers = parsed.ledgers.map((ledger) => normalizeLedger(ledger, ledger?.name || "导入的账本"));
+              } else if (Array.isArray(parsed?.records)) {
+                incomingLedgers = [importAsSingleLedger(parsed.records, parsed.ledgerName || "导入的账本")];
+              } else if (Array.isArray(parsed)) {
+                incomingLedgers = [importAsSingleLedger(parsed, "导入的账本")];
+              }
+
+              if (!incomingLedgers.length) {
+                showToast("未识别到可导入的账本数据");
+                return;
+              }
+
+              const ok = confirm(`检测到 ${incomingLedgers.length} 个账本，是否导入并合并到当前应用？`);
+              if (!ok) return;
+
+              const map = new Map(appState.value.ledgers.map((ledger) => [ledger.id, ledger]));
+              incomingLedgers.forEach((ledger) => {
+                if (map.has(ledger.id)) {
+                  ledger.id = createId("ledger");
+                }
+                map.set(ledger.id, ledger);
+              });
+
+              appState.value.ledgers = Array.from(map.values());
+              if (!currentLedger.value && appState.value.ledgers[0]) {
+                appState.value.lastLedgerId = appState.value.ledgers[0].id;
+              }
+              showToast(`已导入 ${incomingLedgers.length} 个账本`);
+            } catch (e) {
+              showToast(`导入失败：${e?.message || "未知错误"}`);
+            } finally {
+              if (event?.target) event.target.value = "";
+            }
+          }
+
+          // 粘贴共享ID相关方法
+          function openPasteShareId() {
+            pasteShareIdValue.value = "";
+            showPasteShareIdSheet.value = true;
+          }
+
+          function closePasteShareId() {
+            showPasteShareIdSheet.value = false;
+            pasteShareIdValue.value = "";
+          }
+
+          async function confirmPasteShareId() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            
+            const shareId = pasteShareIdValue.value.trim();
+            if (!shareId) {
+              showToast("请输入有效的共享ID");
+              return;
+            }
+            
+            ledger.sharedLedgerId = shareId;
+            closePasteShareId();
+            
+            try {
+              await connectCurrentLedgerSync({ askUpload: false });
+              showToast(`已成功同步共享ID「${shareId}」的账本数据`);
+            } catch (err) {
+              showToast(`同步失败：${err.message}`);
+              console.error("粘贴共享ID同步错误：", err);
+            }
+          }
+
+          watch(
+            appState,
+            () => {
+              if (!appState.value.lastLedgerId && appState.value.ledgers[0]) {
+                appState.value.lastLedgerId = appState.value.ledgers[0].id;
+              }
+              persistAppState();
+            },
+            { deep: true }
+          );
+
+          watch(
+            () => `${currentLedger.value?.id || ""}|${currentLedger.value?.sharedLedgerId || ""}`,
+            () => {
+              const sharedId = currentSharedLedgerId();
+              if (sharedId) connectCurrentLedgerSync({ askUpload: false });
+              else disconnectCloud();
+            }
+          );
+
+          onMounted(() => {
+            loadInitialState();
+            if (appState.value.ledgers.length > 1) {
+              showLedgerSheet.value = true;
+            }
+          });
+
+          return {
+            appState,
+            categories,
+            defaultRateSource,
+            currentLedger,
+            selectedCurrencyMeta,
+            sortedCurrentCurrencies,
+            missingDefaultCurrencies,
+            inputText,
+            errorMsg,
+            toast,
+            fileInputRef,
+            showLedgerSheet,
+            showCurrencySheet,
+            newLedgerName,
+            quickAddCurrencyCode,
+            newCurrencyCode,
+            newCurrencyName,
+            newCurrencySymbol,
+            newCurrencyRate,
+            editOpen,
+            editDetail,
+            editAmount,
+            editCurrency,
+            editCategory,
+            editError,
+            totalCny,
+            totalInSelectedCurrency,
+            grouped,
+            formatMoney,
+            formatDate,
+            currencyDigits,
+            currencySymbol,
+            getAmountCny,
+            convertFromCny,
+            openLedgerPicker,
+            closeLedgerPicker,
+            enterLedger,
+            createLedger,
+            renameLedgerById,
+            renameCurrentLedger,
+            openShareForCurrentLedger,
+            syncCurrentLedgerNow,
+            deleteLedgerById,
+            openCurrencyManager,
+            closeCurrencyManager,
+            setSelectedCurrency,
+            updateCurrencyField,
+            updateCurrencyRate,
+            addDefaultCurrency,
+            addCustomCurrency,
+            removeCurrency,
+            isCategoryExpanded,
+            toggleCategory,
+            addFromInput,
+            openEdit,
+            closeEdit,
+            saveEdit,
+            removeRecord,
+            confirmClearCurrentLedger,
+            exportJson,
+            triggerImport,
+            handleImportFile,
+            showPasteShareIdSheet,
+            pasteShareIdValue,
+            openPasteShareId,
+            closePasteShareId,
+            confirmPasteShareId,
+          };
+        },
+      }).mount("#app");
+    </script>
+  </body>
+</html>
