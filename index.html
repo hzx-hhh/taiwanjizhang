@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
   </head>
   <body class="bg-gray-100 text-gray-900 antialiased">
     <div id="app" class="min-h-dvh pb-24">
@@ -77,6 +78,14 @@
               :disabled="!currentLedger"
             >
               共享
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openShareQr"
+              :disabled="!currentLedger || !currentLedger.sharedLedgerId"
+            >
+              二维码
             </button>
             <button
               type="button"
@@ -536,6 +545,51 @@
         </div>
       </div>
 
+      <div v-if="showShareQrSheet && currentLedger" class="fixed inset-0 z-30">
+        <button type="button" class="absolute inset-0 bg-black/30" @click="closeShareQr"></button>
+        <div class="absolute inset-x-0 bottom-0">
+          <div class="mx-auto max-w-md rounded-t-3xl bg-white p-4 shadow-2xl ring-1 ring-black/5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-gray-900">共享二维码</p>
+                <p class="mt-0.5 text-xs text-gray-500">扫码后可获得当前账本的共享 ID</p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg px-2 py-1 text-sm text-gray-500 hover:bg-gray-50 active:opacity-80"
+                @click="closeShareQr"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div class="mt-4 flex flex-col items-center rounded-3xl bg-gray-50 px-4 py-5">
+              <canvas ref="shareQrCanvasRef" class="rounded-2xl bg-white p-3 shadow-sm"></canvas>
+              <p class="mt-4 text-sm font-medium text-gray-900">{{ currentLedger.name }}</p>
+              <p class="mt-1 break-all text-center text-xs text-gray-500">
+                共享 ID：{{ currentLedger.sharedLedgerId }}
+              </p>
+              <div class="mt-4 flex gap-2">
+                <button
+                  type="button"
+                  class="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 active:opacity-80"
+                  @click="copyCurrentShareId"
+                >
+                  复制 ID
+                </button>
+                <button
+                  type="button"
+                  class="rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white active:opacity-90"
+                  @click="openShareForCurrentLedger"
+                >
+                  更换共享
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="editOpen && currentLedger" class="fixed inset-0 z-40">
         <button
           type="button"
@@ -631,7 +685,7 @@
     </div>
 
     <script>
-      const { createApp, ref, computed, watch, onMounted } = Vue;
+      const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
 
       createApp({
         setup() {
@@ -695,6 +749,8 @@
           const editCurrency = ref("CNY");
           const editCategory = ref("other");
           const editError = ref("");
+          const showShareQrSheet = ref(false);
+          const shareQrCanvasRef = ref(null);
           const cloudReady = ref(false);
           const cloudError = ref("");
           let supabaseClient = null;
@@ -976,6 +1032,28 @@
             return convertToCny(record.amountOriginal, record.currency);
           }
 
+          function ensureLedgerHasCurrency(ledger, code) {
+            if (!ledger || !code) return;
+            const upper = String(code).toUpperCase();
+            if (ledger.currencies.some((item) => item.code === upper)) return;
+            const builtin = DEFAULT_CURRENCIES.find((item) => item.code === upper);
+            ledger.currencies.push(
+              cloneCurrency(
+                builtin || {
+                  code: upper,
+                  name: upper,
+                  symbol: upper,
+                  rateToCny: 1,
+                }
+              )
+            );
+          }
+
+          function ensureLedgerCurrenciesFromRecords(ledger) {
+            if (!ledger) return;
+            (ledger.records || []).forEach((record) => ensureLedgerHasCurrency(ledger, record.currency));
+          }
+
           function mergeRecordsByNewest(localRecords, remoteRecords) {
             const map = new Map();
             [...(localRecords || []), ...(remoteRecords || [])].forEach((item) => {
@@ -1064,6 +1142,7 @@
           function applyRemoteUpsertToCurrentLedger(record) {
             const ledger = currentLedger.value;
             if (!ledger || !record?.id) return;
+            ensureLedgerHasCurrency(ledger, record.currency);
             const idx = ledger.records.findIndex((item) => item.id === record.id);
             if (idx === -1) {
               ledger.records.unshift(record);
@@ -1136,6 +1215,7 @@
               ledger.records = mergeRecordsByNewest(localRecords, cloudRecords);
             }
 
+            ensureLedgerCurrenciesFromRecords(ledger);
             subscribeRealtimeForCurrentLedger(sharedId);
           }
 
@@ -1240,6 +1320,7 @@
               showToast("共享账本 ID 已设置");
             }
             await connectCurrentLedgerSync({ askUpload: true });
+            openShareQr();
           }
 
           async function syncCurrentLedgerNow() {
@@ -1250,8 +1331,60 @@
             }
             const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
             ledger.records = mergeRecordsByNewest(ledger.records, cloudRecords);
+            ensureLedgerCurrenciesFromRecords(ledger);
             await upsertRecordsToCloud(ledger.records, ledger.sharedLedgerId);
             showToast("当前账本已同步");
+          }
+
+          async function copyCurrentShareId() {
+            const shareId = String(currentLedger.value?.sharedLedgerId || "");
+            if (!shareId) {
+              showToast("当前账本还没有共享 ID");
+              return;
+            }
+            try {
+              if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(shareId);
+                showToast("已复制共享 ID");
+              }
+            } catch {
+              showToast("复制失败，请手动复制");
+            }
+          }
+
+          async function renderShareQr() {
+            const shareId = String(currentLedger.value?.sharedLedgerId || "");
+            const canvas = shareQrCanvasRef.value;
+            if (!shareId || !canvas) return;
+            if (!window.QRCode?.toCanvas) {
+              showToast("二维码组件加载失败");
+              return;
+            }
+            try {
+              await window.QRCode.toCanvas(canvas, shareId, {
+                width: 220,
+                margin: 1,
+                color: { dark: "#111827", light: "#ffffff" },
+              });
+            } catch (e) {
+              showToast(`二维码生成失败：${e?.message || "未知错误"}`);
+            }
+          }
+
+          function openShareQr() {
+            const shareId = String(currentLedger.value?.sharedLedgerId || "");
+            if (!shareId) {
+              showToast("请先为当前账本设置共享");
+              return;
+            }
+            showShareQrSheet.value = true;
+            nextTick(() => {
+              renderShareQr();
+            });
+          }
+
+          function closeShareQr() {
+            showShareQrSheet.value = false;
           }
 
           function deleteLedgerById(id) {
@@ -1573,9 +1706,17 @@
           }
 
           function importAsSingleLedger(rawRecords, ledgerName = "导入的账本") {
-            const ledger = createLedgerObject(ledgerName);
-            ledger.records = rawRecords.map(normalizeLegacyRecord).filter(Boolean);
-            return ledger;
+            return normalizeLedger(
+              {
+                name: ledgerName,
+                selectedCurrency: "CNY",
+                currencies: [],
+                records: rawRecords.map(normalizeLegacyRecord).filter(Boolean),
+                collapsedCategories: [],
+                sharedLedgerId: "",
+              },
+              ledgerName
+            );
           }
 
           async function handleImportFile(event) {
@@ -1680,6 +1821,8 @@
             editCurrency,
             editCategory,
             editError,
+            showShareQrSheet,
+            shareQrCanvasRef,
             totalCny,
             totalInSelectedCurrency,
             grouped,
@@ -1696,6 +1839,9 @@
             renameLedgerById,
             renameCurrentLedger,
             openShareForCurrentLedger,
+            openShareQr,
+            closeShareQr,
+            copyCurrentShareId,
             syncCurrentLedgerNow,
             deleteLedgerById,
             openCurrencyManager,
