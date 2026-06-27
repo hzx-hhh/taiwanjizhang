@@ -875,6 +875,7 @@
               category: categories.some((c) => c.key === item.category) ? item.category : classify(item.detail),
               ts: Number(item.ts || item.createdAt || Date.now()),
               updatedAt: Number(item.updatedAt || item.ts || item.createdAt || Date.now()),
+              isDeleted: Boolean(item.isDeleted || false), // 新增：删除标记
             };
           }
 
@@ -1058,18 +1059,18 @@
             (ledger.records || []).forEach((record) => ensureLedgerHasCurrency(ledger, record.currency));
           }
 
-          // 核心修复2：基于时间戳的冲突合并逻辑（保留最新修改）
+          // 核心修复2：完善的合并逻辑（处理删除标记+时间戳优先级）
           function mergeRecordsByNewest(localRecords, remoteRecords) {
             const map = new Map();
             
-            // 先添加本地记录
+            // 第一步：添加本地记录（包含删除标记）
             (localRecords || []).forEach((item) => {
               if (!item?.id) return;
               const normalized = normalizeLegacyRecord(item);
               if (normalized) map.set(normalized.id, normalized);
             });
             
-            // 添加远程记录，仅当远程记录更新时覆盖本地
+            // 第二步：添加远程记录，仅当远程记录更新时覆盖本地
             (remoteRecords || []).forEach((item) => {
               if (!item?.id) return;
               const normalized = normalizeLegacyRecord(item);
@@ -1077,6 +1078,7 @@
               
               const existing = map.get(normalized.id);
               if (!existing) {
+                // 远程有但本地没有：直接添加（如果是已删除则标记）
                 map.set(normalized.id, normalized);
               } else {
                 // 比较更新时间戳，保留更新的版本
@@ -1088,8 +1090,12 @@
               }
             });
             
-            // 按时间倒序排列
-            return Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+            // 第三步：过滤掉已删除的记录（最终只保留未删除的）
+            const finalRecords = Array.from(map.values())
+              .filter(record => !record.isDeleted) // 关键：过滤已删除的记录
+              .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+            
+            return finalRecords;
           }
 
           function currentSharedLedgerId() {
@@ -1105,6 +1111,7 @@
               category: row.category,
               ts: row.ts,
               updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : row.ts,
+              isDeleted: Boolean(row.is_deleted || false), // 新增：映射云端删除标记
             });
           }
 
@@ -1119,7 +1126,7 @@
             try {
               const { data, error } = await client
                 .from("expense_records")
-                .select("id, detail, currency, amount_original, category, ts, updated_at")
+                .select("id, detail, currency, amount_original, category, ts, updated_at, is_deleted") // 新增：查询删除标记
                 .eq("ledger_id", sharedId)
                 .order("ts", { ascending: false })
                 .limit(5000);
@@ -1149,6 +1156,7 @@
               category: item.category || "other",
               ts: Number(item.ts || Date.now()),
               updated_at: new Date(Number(item.updatedAt || Date.now())).toISOString(),
+              is_deleted: Boolean(item.isDeleted || false), // 新增：上传删除标记
             }));
             const { error } = await client.from("expense_records").upsert(rows, { onConflict: "id" });
             if (error) showToast(`云端写入失败：${error.message}`);
@@ -1158,7 +1166,17 @@
             if (!sharedId || !recordId) return;
             const client = initSupabaseClient();
             if (!client) return;
-            const { error } = await client.from("expense_records").delete().eq("ledger_id", sharedId).eq("id", recordId);
+            
+            // 核心修复3：删除时不直接删除云端数据，而是标记is_deleted=true（软删除）
+            const { error } = await client
+              .from("expense_records")
+              .update({ 
+                is_deleted: true,
+                updated_at: new Date().toISOString() 
+              })
+              .eq("ledger_id", sharedId)
+              .eq("id", recordId);
+            
             if (error) showToast(`云端删除失败：${error.message}`);
           }
 
@@ -1166,7 +1184,16 @@
             if (!sharedId) return;
             const client = initSupabaseClient();
             if (!client) return;
-            const { error } = await client.from("expense_records").delete().eq("ledger_id", sharedId);
+            
+            // 清空时标记所有记录为已删除
+            const { error } = await client
+              .from("expense_records")
+              .update({ 
+                is_deleted: true,
+                updated_at: new Date().toISOString() 
+              })
+              .eq("ledger_id", sharedId);
+            
             if (error) showToast(`云端清空失败：${error.message}`);
           }
 
@@ -1176,9 +1203,17 @@
             ensureLedgerHasCurrency(ledger, record.currency);
             const idx = ledger.records.findIndex((item) => item.id === record.id);
             if (idx === -1) {
-              ledger.records.unshift(record);
+              // 新增记录：如果是已删除则跳过
+              if (!record.isDeleted) {
+                ledger.records.unshift(record);
+              }
             } else {
-              ledger.records[idx] = mergeRecordsByNewest([ledger.records[idx]], [record])[0];
+              // 更新记录：如果远程标记为删除，则本地也删除
+              if (record.isDeleted) {
+                ledger.records.splice(idx, 1);
+              } else {
+                ledger.records[idx] = mergeRecordsByNewest([ledger.records[idx]], [record])[0];
+              }
             }
             ledger.records = [...ledger.records].sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
           }
@@ -1226,7 +1261,7 @@
             const cloudRecords = await fetchCloudRecords(sharedId);
             const localRecords = [...ledger.records];
 
-            // 核心：自动合并云端和本地记录（保留最新修改）
+            // 核心：自动合并云端和本地记录（保留最新修改+过滤删除）
             ledger.records = mergeRecordsByNewest(localRecords, cloudRecords);
 
             ensureLedgerCurrenciesFromRecords(ledger);
@@ -1337,7 +1372,7 @@
             }
           }
 
-          // 核心修复4：同步逻辑优化（先合并再上传）
+          // 核心修复4：最终版同步逻辑（先上传本地变更→再下载云端→合并过滤删除）
           async function syncCurrentLedgerNow() {
             const ledger = currentLedger.value;
             if (!ledger?.sharedLedgerId) {
@@ -1349,20 +1384,20 @@
               const client = initSupabaseClient();
               if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
               
-              // 1. 先下载云端最新记录
+              // 步骤1：先上传本地所有记录（包含删除标记）到云端
+              await upsertRecordsToCloud(ledger.records, ledger.sharedLedgerId);
+              
+              // 步骤2：下载云端最新记录（包含其他人的删除标记）
               const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
               
-              // 2. 合并本地和云端记录（保留最新修改）
+              // 步骤3：合并记录并过滤已删除的
               const mergedRecords = mergeRecordsByNewest(ledger.records, cloudRecords);
               ledger.records = mergedRecords;
               
-              // 3. 确保币种完整
+              // 步骤4：确保币种完整
               ensureLedgerCurrenciesFromRecords(ledger);
               
-              // 4. 上传合并后的记录到云端
-              await upsertRecordsToCloud(mergedRecords, ledger.sharedLedgerId);
-              
-              showToast(`同步成功！共合并 ${cloudRecords.length} 条云端记录，本地总计 ${mergedRecords.length} 条`);
+              showToast(`同步成功！本地 ${ledger.records.length} 条记录，已同步所有删除操作`);
             } catch (err) {
               showToast(`同步失败：${err.message}`);
               console.error("同步错误：", err);
@@ -1529,6 +1564,7 @@
                 category: classify(detail),
                 ts: Date.now(),
                 updatedAt: Date.now(), // 新增记录时标记更新时间
+                isDeleted: false, // 新增：默认未删除
               },
             };
           }
@@ -1598,6 +1634,7 @@
               currency,
               category: editCategory.value || classify(detail),
               updatedAt: Date.now(), // 关键：标记修改时间
+              isDeleted: false, // 确保编辑后取消删除标记
             };
             showToast("已保存");
             if (ledger.sharedLedgerId) upsertRecordsToCloud([ledger.records[idx]], ledger.sharedLedgerId);
@@ -1611,9 +1648,22 @@
             if (!item) return;
             const ok = confirm(`确定删除这条记录吗？\n\n${item.detail}\n${currencySymbol(item.currency)} ${item.amountOriginal}`);
             if (!ok) return;
-            ledger.records = ledger.records.filter((r) => r.id !== id);
+            
+            // 核心修复5：删除时标记isDeleted=true并更新时间戳（软删除）
+            const idx = ledger.records.findIndex(r => r.id === id);
+            if (idx !== -1) {
+              ledger.records[idx] = {
+                ...ledger.records[idx],
+                isDeleted: true,
+                updatedAt: Date.now() // 标记删除时间，确保优先级最高
+              };
+              // 立即上传删除标记到云端
+              if (ledger.sharedLedgerId) deleteRecordFromCloud(id, ledger.sharedLedgerId);
+            }
+            
+            // 过滤掉已删除的记录（本地不再显示）
+            ledger.records = ledger.records.filter((r) => !r.isDeleted);
             showToast("已删除");
-            if (ledger.sharedLedgerId) deleteRecordFromCloud(id, ledger.sharedLedgerId);
           }
 
           async function confirmClearCurrentLedger() {
@@ -1625,8 +1675,17 @@
             }
             const ok = confirm(`确定清空「${ledger.name}」里的所有记录吗？此操作不可撤销。`);
             if (!ok) return;
+            
+            // 清空时标记所有记录为已删除
+            ledger.records.forEach(record => {
+              record.isDeleted = true;
+              record.updatedAt = Date.now();
+            });
+            
+            // 本地只保留未删除的（即清空）
             ledger.records = [];
             showToast("当前账本已清空");
+            
             if (ledger.sharedLedgerId) {
               const clearCloud = confirm("是否同时清空这个共享账本的云端记录？");
               if (clearCloud) await clearSharedLedgerCloud(ledger.sharedLedgerId);
@@ -1659,6 +1718,7 @@
                   category: record.category,
                   ts: Number(record.ts),
                   updatedAt: Number(record.updatedAt || record.ts || Date.now()), // 保留更新时间
+                  isDeleted: Boolean(record.isDeleted || false), // 导出删除标记
                 })),
                 collapsedCategories: [...(ledger.collapsedCategories || [])],
                 createdAt: Number(ledger.createdAt || Date.now()),
