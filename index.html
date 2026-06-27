@@ -6,6 +6,7 @@
     <title>旅行记账小助手</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   </head>
   <body class="bg-gray-100 text-gray-900 antialiased">
     <div id="app" class="min-h-dvh pb-24">
@@ -68,6 +69,22 @@
               @click="triggerImport"
             >
               导入 JSON
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="openShareForCurrentLedger"
+              :disabled="!currentLedger"
+            >
+              共享
+            </button>
+            <button
+              type="button"
+              class="whitespace-nowrap rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm active:opacity-80"
+              @click="syncCurrentLedgerNow"
+              :disabled="!currentLedger || !currentLedger.sharedLedgerId"
+            >
+              同步
             </button>
             <button
               type="button"
@@ -167,29 +184,15 @@
             <div class="mt-3 rounded-2xl bg-gray-50 px-3 py-3">
               <div class="flex items-center justify-between gap-3">
                 <div>
-                  <p class="text-[11px] text-gray-500">汇率说明</p>
+                  <p class="text-[11px] text-gray-500">当前账本</p>
                   <p class="mt-1 text-xs text-gray-700">
-                    所有汇率均按“1 单位外币 = 多少人民币（CNY）”存储
+                    录入区只显示本账本已启用的币种
                   </p>
                 </div>
                 <p class="text-right text-[11px] text-gray-500">
-                  默认汇率参考<br />
-                  {{ defaultRateSource }}
+                  {{ currentLedger.currencies.length }} 个启用币种<br />
+                  {{ currentLedger.sharedLedgerId ? "已开启共享同步" : "本地账本" }}
                 </p>
-              </div>
-              <div class="mt-3 flex gap-2 overflow-x-auto pb-1">
-                <div
-                  v-for="currency in sortedCurrentCurrencies"
-                  :key="currency.code"
-                  class="min-w-[122px] rounded-2xl border border-white/70 bg-white px-3 py-2 shadow-sm"
-                >
-                  <p class="text-[11px] text-gray-500">
-                    {{ currency.name }} · {{ currency.code }}
-                  </p>
-                  <p class="mt-1 text-sm font-medium tabular-nums text-gray-900">
-                    1 {{ currency.code }} = ¥ {{ formatMoney(currency.rateToCny, 4) }}
-                  </p>
-                </div>
               </div>
             </div>
           </div>
@@ -323,6 +326,9 @@
                     <p class="mt-0.5 text-xs text-gray-500">
                       {{ ledger.records.length }} 条记录 · {{ ledger.currencies.length }} 个币种
                     </p>
+                    <p class="mt-0.5 text-[11px] text-gray-400">
+                      {{ ledger.sharedLedgerId ? "已开启共享同步" : "仅本地保存" }}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -381,7 +387,7 @@
               <div>
                 <p class="text-sm font-semibold text-gray-900">币种与汇率设置</p>
                 <p class="mt-0.5 text-xs text-gray-500">
-                  人民币固定为基准，其他币种按“1 单位外币 = 多少 CNY”设置
+                  人民币固定为基准；这里列出的币种，就是当前账本录入区会显示的币种
                 </p>
               </div>
               <button
@@ -394,6 +400,11 @@
             </div>
 
             <div class="mt-4 max-h-[42vh] space-y-3 overflow-y-auto pr-1">
+              <div class="rounded-2xl bg-gray-50 px-3 py-3">
+                <p class="text-[11px] text-gray-500">默认汇率参考</p>
+                <p class="mt-1 text-xs text-gray-700">{{ defaultRateSource }}</p>
+                <p class="mt-1 text-xs text-gray-500">汇率格式：1 单位外币 = 多少人民币（CNY）</p>
+              </div>
               <div
                 v-for="currency in currentLedger.currencies"
                 :key="currency.code"
@@ -624,9 +635,12 @@
 
       createApp({
         setup() {
-          const APP_STORAGE_KEY = "travel_accounting_app_v3";
+          const APP_STORAGE_KEY = "travel_accounting_app_v4";
           const LEGACY_RECORDS_KEY = "tw_travel_expenses_v1";
           const defaultRateSource = "中国银行 2026-06-15 中行折算价";
+          const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
+          const SUPABASE_URL = SUPABASE_URL_RAW.replace(/\/rest\/v1\/?$/, "");
+          const SUPABASE_ANON_KEY = "sb_publishable_s8kxnb3m4iq2Q9q495KRzg_uErnPqdo";
 
           const categories = [
             { key: "food", label: "餐饮", emoji: "🍜" },
@@ -649,6 +663,7 @@
             { code: "CNY", name: "人民币", symbol: "¥", rateToCny: 1 },
             { code: "SGD", name: "新币", symbol: "S$", rateToCny: 5.2944 },
             { code: "MYR", name: "马币", symbol: "RM", rateToCny: 1.6754 },
+            { code: "THB", name: "泰铢", symbol: "฿", rateToCny: 0.2076 },
             { code: "TWD", name: "台币", symbol: "NT$", rateToCny: 0.2143 },
             { code: "JPY", name: "日元", symbol: "¥", rateToCny: 0.042424 },
             { code: "KRW", name: "韩元", symbol: "₩", rateToCny: 0.00448 },
@@ -680,6 +695,10 @@
           const editCurrency = ref("CNY");
           const editCategory = ref("other");
           const editError = ref("");
+          const cloudReady = ref(false);
+          const cloudError = ref("");
+          let supabaseClient = null;
+          let realtimeChannel = null;
 
           function showToast(msg) {
             toast.value = msg;
@@ -730,6 +749,54 @@
             return DEFAULT_CURRENCIES.map(cloneCurrency);
           }
 
+          function buildStarterCurrencies() {
+            return [cloneCurrency(DEFAULT_CURRENCIES[0])];
+          }
+
+          function hasSupabaseSDK() {
+            return typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function";
+          }
+
+          function initSupabaseClient() {
+            cloudError.value = "";
+            if (supabaseClient) return supabaseClient;
+            if (!hasSupabaseSDK()) {
+              cloudReady.value = false;
+              cloudError.value = "Supabase SDK 未加载";
+              return null;
+            }
+            try {
+              supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+              });
+              cloudReady.value = true;
+              return supabaseClient;
+            } catch (e) {
+              cloudReady.value = false;
+              cloudError.value = String(e?.message || e || "初始化失败");
+              return null;
+            }
+          }
+
+          function disconnectCloud() {
+            try {
+              if (realtimeChannel) realtimeChannel.unsubscribe();
+            } catch {
+              // ignore
+            }
+            realtimeChannel = null;
+          }
+
+          function createShareLedgerId() {
+            try {
+              const arr = new Uint8Array(16);
+              crypto.getRandomValues(arr);
+              return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
+            } catch {
+              return createId("share");
+            }
+          }
+
           function classify(detail) {
             const text = String(detail || "").toLowerCase();
             for (const rule of keywordRules) {
@@ -750,13 +817,14 @@
               amountOriginal: roundTo(amountOriginal, currencyDigits(currency)),
               category: categories.some((c) => c.key === item.category) ? item.category : classify(item.detail),
               ts: Number(item.ts || item.createdAt || Date.now()),
+              updatedAt: Number(item.updatedAt || item.ts || item.createdAt || Date.now()),
             };
           }
 
           function normalizeLedger(ledger, fallbackName = "新的旅行记账小助手") {
             const currencies = Array.isArray(ledger?.currencies) && ledger.currencies.length
               ? ledger.currencies.map(cloneCurrency)
-              : buildDefaultCurrencies();
+              : buildStarterCurrencies();
 
             if (!currencies.some((c) => c.code === "CNY")) {
               currencies.unshift(cloneCurrency(DEFAULT_CURRENCIES[0]));
@@ -779,6 +847,13 @@
               ? ledger.records.map(normalizeLegacyRecord).filter(Boolean)
               : [];
 
+            records.forEach((record) => {
+              if (!uniqueCurrencies.some((item) => item.code === record.currency)) {
+                const builtin = DEFAULT_CURRENCIES.find((item) => item.code === record.currency);
+                uniqueCurrencies.push(cloneCurrency(builtin || { code: record.currency, name: record.currency, symbol: record.currency, rateToCny: 1 }));
+              }
+            });
+
             const collapsedCategories = Array.isArray(ledger?.collapsedCategories)
               ? ledger.collapsedCategories.filter((key) => categories.some((c) => c.key === key))
               : [];
@@ -790,6 +865,7 @@
               currencies: uniqueCurrencies,
               records: records.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)),
               collapsedCategories,
+              sharedLedgerId: String(ledger?.sharedLedgerId || ""),
               createdAt: Number(ledger?.createdAt || Date.now()),
             };
           }
@@ -799,9 +875,10 @@
               {
                 name: name || "新的旅行记账小助手",
                 selectedCurrency: "CNY",
-                currencies: buildDefaultCurrencies(),
+                currencies: buildStarterCurrencies(),
                 records: [],
                 collapsedCategories: [],
+                sharedLedgerId: "",
               },
               name || "新的旅行记账小助手"
             );
@@ -812,7 +889,7 @@
             const parsed = raw ? safeParseJSON(raw) : null;
             if (parsed && Array.isArray(parsed.ledgers) && parsed.ledgers.length) {
               appState.value = {
-                version: 3,
+                version: 4,
                 ledgers: parsed.ledgers.map((ledger) => normalizeLedger(ledger)),
                 lastLedgerId: parsed.lastLedgerId || parsed.ledgers[0]?.id || null,
               };
@@ -824,12 +901,12 @@
             if (Array.isArray(legacyParsed) && legacyParsed.length) {
               const migrated = createLedgerObject("台湾旅行记账小助手");
               migrated.records = legacyParsed.map(normalizeLegacyRecord).filter(Boolean);
-              appState.value = { version: 3, ledgers: [migrated], lastLedgerId: migrated.id };
+              appState.value = { version: 4, ledgers: [migrated], lastLedgerId: migrated.id };
               return;
             }
 
             const first = createLedgerObject("台湾旅行记账小助手");
-            appState.value = { version: 3, ledgers: [first], lastLedgerId: first.id };
+            appState.value = { version: 4, ledgers: [first], lastLedgerId: first.id };
           }
 
           function persistAppState() {
@@ -897,6 +974,169 @@
 
           function getAmountCny(record) {
             return convertToCny(record.amountOriginal, record.currency);
+          }
+
+          function mergeRecordsByNewest(localRecords, remoteRecords) {
+            const map = new Map();
+            [...(localRecords || []), ...(remoteRecords || [])].forEach((item) => {
+              if (!item?.id) return;
+              const incoming = normalizeLegacyRecord(item);
+              if (!incoming) return;
+              const existing = map.get(incoming.id);
+              if (!existing) {
+                map.set(incoming.id, incoming);
+                return;
+              }
+              const existingUpdated = Number(existing.updatedAt || existing.ts || 0);
+              const incomingUpdated = Number(incoming.updatedAt || incoming.ts || 0);
+              map.set(incoming.id, incomingUpdated >= existingUpdated ? incoming : existing);
+            });
+            return Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+          }
+
+          function currentSharedLedgerId() {
+            return String(currentLedger.value?.sharedLedgerId || "").trim();
+          }
+
+          function mapCloudRowToRecord(row) {
+            return normalizeLegacyRecord({
+              id: row.id,
+              detail: row.detail,
+              currency: row.currency,
+              amountOriginal: row.amount_original,
+              category: row.category,
+              ts: row.ts,
+              updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : row.ts,
+            });
+          }
+
+          async function fetchCloudRecords(sharedId = currentSharedLedgerId()) {
+            if (!sharedId) return [];
+            const client = initSupabaseClient();
+            if (!client) return [];
+            const { data, error } = await client
+              .from("expense_records")
+              .select("id, detail, currency, amount_original, category, ts, updated_at")
+              .eq("ledger_id", sharedId)
+              .order("ts", { ascending: false })
+              .limit(5000);
+            if (error) {
+              showToast(`云端拉取失败：${error.message}`);
+              return [];
+            }
+            return (data || []).map(mapCloudRowToRecord).filter(Boolean);
+          }
+
+          async function upsertRecordsToCloud(records, sharedId = currentSharedLedgerId()) {
+            if (!sharedId || !records?.length) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            const rows = records.map((item) => ({
+              id: item.id,
+              ledger_id: sharedId,
+              detail: item.detail || "",
+              currency: item.currency || "CNY",
+              amount_original: Number(item.amountOriginal || 0),
+              category: item.category || "other",
+              ts: Number(item.ts || Date.now()),
+              updated_at: new Date(Number(item.updatedAt || Date.now())).toISOString(),
+            }));
+            const { error } = await client.from("expense_records").upsert(rows, { onConflict: "id" });
+            if (error) showToast(`云端写入失败：${error.message}`);
+          }
+
+          async function deleteRecordFromCloud(recordId, sharedId = currentSharedLedgerId()) {
+            if (!sharedId || !recordId) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            const { error } = await client.from("expense_records").delete().eq("ledger_id", sharedId).eq("id", recordId);
+            if (error) showToast(`云端删除失败：${error.message}`);
+          }
+
+          async function clearSharedLedgerCloud(sharedId = currentSharedLedgerId()) {
+            if (!sharedId) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            const { error } = await client.from("expense_records").delete().eq("ledger_id", sharedId);
+            if (error) showToast(`云端清空失败：${error.message}`);
+          }
+
+          function applyRemoteUpsertToCurrentLedger(record) {
+            const ledger = currentLedger.value;
+            if (!ledger || !record?.id) return;
+            const idx = ledger.records.findIndex((item) => item.id === record.id);
+            if (idx === -1) {
+              ledger.records.unshift(record);
+            } else {
+              ledger.records[idx] = mergeRecordsByNewest([ledger.records[idx]], [record])[0];
+            }
+            ledger.records = [...ledger.records].sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+          }
+
+          function applyRemoteDeleteToCurrentLedger(recordId) {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            ledger.records = ledger.records.filter((item) => item.id !== recordId);
+          }
+
+          function subscribeRealtimeForCurrentLedger(sharedId = currentSharedLedgerId()) {
+            disconnectCloud();
+            if (!sharedId) return;
+            const client = initSupabaseClient();
+            if (!client) return;
+            realtimeChannel = client
+              .channel(`ledger:${sharedId}`)
+              .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "expense_records", filter: `ledger_id=eq.${sharedId}` },
+                (payload) => {
+                  if (!payload) return;
+                  if (payload.eventType === "DELETE") {
+                    const recordId = payload.old?.id;
+                    if (recordId) applyRemoteDeleteToCurrentLedger(recordId);
+                    return;
+                  }
+                  const record = mapCloudRowToRecord(payload.new);
+                  if (record) applyRemoteUpsertToCurrentLedger(record);
+                }
+              )
+              .subscribe((status) => {
+                if (status === "SUBSCRIBED") showToast("当前账本已连接共享同步");
+              });
+          }
+
+          async function connectCurrentLedgerSync({ askUpload = false } = {}) {
+            const ledger = currentLedger.value;
+            const sharedId = currentSharedLedgerId();
+            if (!ledger || !sharedId) {
+              disconnectCloud();
+              return;
+            }
+
+            const cloudRecords = await fetchCloudRecords(sharedId);
+            const localRecords = [...ledger.records];
+
+            if (askUpload && localRecords.length > 0) {
+              if (cloudRecords.length === 0) {
+                const shouldUpload = confirm(`当前账本有 ${localRecords.length} 条本地记录。\n是否上传到共享账本？`);
+                if (shouldUpload) {
+                  await upsertRecordsToCloud(localRecords, sharedId);
+                }
+              } else {
+                const shouldMerge = confirm(`当前账本本地有 ${localRecords.length} 条，云端有 ${cloudRecords.length} 条。\n是否把本地记录也合并到共享账本？`);
+                if (shouldMerge) {
+                  const merged = mergeRecordsByNewest(localRecords, cloudRecords);
+                  ledger.records = merged;
+                  await upsertRecordsToCloud(merged, sharedId);
+                } else {
+                  ledger.records = cloudRecords;
+                }
+              }
+            } else {
+              ledger.records = mergeRecordsByNewest(localRecords, cloudRecords);
+            }
+
+            subscribeRealtimeForCurrentLedger(sharedId);
           }
 
           const totalCny = computed(() => {
@@ -980,6 +1220,38 @@
           function renameCurrentLedger() {
             if (!currentLedger.value) return;
             renameLedgerById(currentLedger.value.id);
+          }
+
+          async function openShareForCurrentLedger() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            const current = String(ledger.sharedLedgerId || "");
+            const tip = current
+              ? `当前共享账本 ID：\n${current}\n\n可直接复制给别人，或输入新的共享 ID 进行切换。留空则自动生成一个新的。`
+              : "输入共享账本 ID（别人发你的那串）。\n如果想新建一个共享账本，留空直接确定即可自动生成。";
+            const input = prompt(tip, current);
+            if (input === null) return;
+            const next = String(input || "").trim() || createShareLedgerId();
+            ledger.sharedLedgerId = next;
+            try {
+              if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(next);
+              showToast("共享账本 ID 已设置并复制");
+            } catch {
+              showToast("共享账本 ID 已设置");
+            }
+            await connectCurrentLedgerSync({ askUpload: true });
+          }
+
+          async function syncCurrentLedgerNow() {
+            const ledger = currentLedger.value;
+            if (!ledger?.sharedLedgerId) {
+              showToast("当前账本还没有开启共享");
+              return;
+            }
+            const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
+            ledger.records = mergeRecordsByNewest(ledger.records, cloudRecords);
+            await upsertRecordsToCloud(ledger.records, ledger.sharedLedgerId);
+            showToast("当前账本已同步");
           }
 
           function deleteLedgerById(id) {
@@ -1141,6 +1413,7 @@
                 amountOriginal: roundTo(amountInput, currencyDigits(currency)),
                 category: classify(detail),
                 ts: Date.now(),
+                updatedAt: Date.now(),
               },
             };
           }
@@ -1159,6 +1432,7 @@
             ledger.records.unshift(parsed.data);
             inputText.value = "";
             showToast("已记录");
+            if (ledger.sharedLedgerId) upsertRecordsToCloud([parsed.data], ledger.sharedLedgerId);
           }
 
           function openEdit(item) {
@@ -1207,8 +1481,10 @@
               amountOriginal: roundTo(amount, currencyDigits(currency)),
               currency,
               category: editCategory.value || classify(detail),
+              updatedAt: Date.now(),
             };
             showToast("已保存");
+            if (ledger.sharedLedgerId) upsertRecordsToCloud([ledger.records[idx]], ledger.sharedLedgerId);
             closeEdit();
           }
 
@@ -1221,9 +1497,10 @@
             if (!ok) return;
             ledger.records = ledger.records.filter((r) => r.id !== id);
             showToast("已删除");
+            if (ledger.sharedLedgerId) deleteRecordFromCloud(id, ledger.sharedLedgerId);
           }
 
-          function confirmClearCurrentLedger() {
+          async function confirmClearCurrentLedger() {
             const ledger = currentLedger.value;
             if (!ledger) return;
             if (ledger.records.length === 0) {
@@ -1234,12 +1511,16 @@
             if (!ok) return;
             ledger.records = [];
             showToast("当前账本已清空");
+            if (ledger.sharedLedgerId) {
+              const clearCloud = confirm("是否同时清空这个共享账本的云端记录？");
+              if (clearCloud) await clearSharedLedgerCloud(ledger.sharedLedgerId);
+            }
           }
 
           function buildExportPayload() {
             return {
               app: "旅行记账小助手",
-              version: 3,
+              version: 4,
               exportedAt: new Date().toISOString(),
               rateBase: "CNY",
               rateSource: defaultRateSource,
@@ -1247,6 +1528,7 @@
                 id: ledger.id,
                 name: ledger.name,
                 selectedCurrency: ledger.selectedCurrency,
+                sharedLedgerId: ledger.sharedLedgerId || "",
                 currencies: ledger.currencies.map((currency) => ({
                   code: currency.code,
                   name: currency.name,
@@ -1260,6 +1542,7 @@
                   amountOriginal: Number(record.amountOriginal),
                   category: record.category,
                   ts: Number(record.ts),
+                  updatedAt: Number(record.updatedAt || record.ts || Date.now()),
                 })),
                 collapsedCategories: [...(ledger.collapsedCategories || [])],
                 createdAt: Number(ledger.createdAt || Date.now()),
@@ -1355,6 +1638,15 @@
             { deep: true }
           );
 
+          watch(
+            () => `${currentLedger.value?.id || ""}|${currentLedger.value?.sharedLedgerId || ""}`,
+            () => {
+              const sharedId = currentSharedLedgerId();
+              if (sharedId) connectCurrentLedgerSync({ askUpload: false });
+              else disconnectCloud();
+            }
+          );
+
           onMounted(() => {
             loadInitialState();
             if (appState.value.ledgers.length > 1) {
@@ -1403,6 +1695,8 @@
             createLedger,
             renameLedgerById,
             renameCurrentLedger,
+            openShareForCurrentLedger,
+            syncCurrentLedgerNow,
             deleteLedgerById,
             openCurrencyManager,
             closeCurrencyManager,
