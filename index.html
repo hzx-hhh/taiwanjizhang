@@ -769,8 +769,20 @@
             }
           }
 
+          // 生成唯一ID（用于账本/记录）
           function createId(prefix = "id") {
             return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+          }
+
+          // 生成永久唯一的共享ID（基于加密随机数）
+          function createPermanentShareId() {
+            try {
+              const arr = new Uint8Array(16);
+              crypto.getRandomValues(arr);
+              return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
+            } catch {
+              return createId("share_permanent");
+            }
           }
 
           function roundTo(n, digits = 4) {
@@ -842,16 +854,6 @@
             realtimeChannel = null;
           }
 
-          function createShareLedgerId() {
-            try {
-              const arr = new Uint8Array(16);
-              crypto.getRandomValues(arr);
-              return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
-            } catch {
-              return createId("share");
-            }
-          }
-
           function classify(detail) {
             const text = String(detail || "").toLowerCase();
             for (const rule of keywordRules) {
@@ -913,6 +915,9 @@
               ? ledger.collapsedCategories.filter((key) => categories.some((c) => c.key === key))
               : [];
 
+            // 核心修复1：账本首次创建时生成永久唯一的共享ID，不再重复生成
+            const permanentShareId = ledger?.sharedLedgerId || createPermanentShareId();
+
             return {
               id: ledger?.id || createId("ledger"),
               name: String(ledger?.name || fallbackName),
@@ -920,7 +925,7 @@
               currencies: uniqueCurrencies,
               records: records.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)),
               collapsedCategories,
-              sharedLedgerId: String(ledger?.sharedLedgerId || ""),
+              sharedLedgerId: permanentShareId, // 永久唯一的共享ID
               createdAt: Number(ledger?.createdAt || Date.now()),
             };
           }
@@ -933,7 +938,7 @@
                 currencies: buildStarterCurrencies(),
                 records: [],
                 collapsedCategories: [],
-                sharedLedgerId: "",
+                sharedLedgerId: "", // 空值会在normalizeLedger中自动生成永久ID
               },
               name || "新的旅行记账小助手"
             );
@@ -945,7 +950,7 @@
             if (parsed && Array.isArray(parsed.ledgers) && parsed.ledgers.length) {
               appState.value = {
                 version: 4,
-                ledgers: parsed.ledgers.map((ledger) => normalizeLedger(ledger)),
+                ledgers: parsed.ledgers.map((ledger) => normalizeLedger(ledger)), // 确保旧账本也有永久共享ID
                 lastLedgerId: parsed.lastLedgerId || parsed.ledgers[0]?.id || null,
               };
               return;
@@ -1053,21 +1058,37 @@
             (ledger.records || []).forEach((record) => ensureLedgerHasCurrency(ledger, record.currency));
           }
 
+          // 核心修复2：基于时间戳的冲突合并逻辑（保留最新修改）
           function mergeRecordsByNewest(localRecords, remoteRecords) {
             const map = new Map();
-            [...(localRecords || []), ...(remoteRecords || [])].forEach((item) => {
+            
+            // 先添加本地记录
+            (localRecords || []).forEach((item) => {
               if (!item?.id) return;
-              const incoming = normalizeLegacyRecord(item);
-              if (!incoming) return;
-              const existing = map.get(incoming.id);
-              if (!existing) {
-                map.set(incoming.id, incoming);
-                return;
-              }
-              const existingUpdated = Number(existing.updatedAt || existing.ts || 0);
-              const incomingUpdated = Number(incoming.updatedAt || incoming.ts || 0);
-              map.set(incoming.id, incomingUpdated >= existingUpdated ? incoming : existing);
+              const normalized = normalizeLegacyRecord(item);
+              if (normalized) map.set(normalized.id, normalized);
             });
+            
+            // 添加远程记录，仅当远程记录更新时覆盖本地
+            (remoteRecords || []).forEach((item) => {
+              if (!item?.id) return;
+              const normalized = normalizeLegacyRecord(item);
+              if (!normalized) return;
+              
+              const existing = map.get(normalized.id);
+              if (!existing) {
+                map.set(normalized.id, normalized);
+              } else {
+                // 比较更新时间戳，保留更新的版本
+                const existingTime = Number(existing.updatedAt || existing.ts || 0);
+                const remoteTime = Number(normalized.updatedAt || normalized.ts || 0);
+                if (remoteTime > existingTime) {
+                  map.set(normalized.id, normalized);
+                }
+              }
+            });
+            
+            // 按时间倒序排列
             return Array.from(map.values()).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
           }
 
@@ -1205,7 +1226,7 @@
             const cloudRecords = await fetchCloudRecords(sharedId);
             const localRecords = [...ledger.records];
 
-            // 移除合并确认弹窗，直接合并
+            // 核心：自动合并云端和本地记录（保留最新修改）
             ledger.records = mergeRecordsByNewest(localRecords, cloudRecords);
 
             ensureLedgerCurrenciesFromRecords(ledger);
@@ -1295,23 +1316,20 @@
             renameLedgerById(currentLedger.value.id);
           }
 
-          // 核心修改：复制共享ID到剪贴板
+          // 核心修复3：复制永久共享ID到剪贴板（不再生成新ID）
           async function copyShareIdToClipboard() {
             const ledger = currentLedger.value;
             if (!ledger) return;
             
-            // 如果还没有共享ID，先创建一个
-            let shareId = ledger.sharedLedgerId || ledger.id;
-            if (!ledger.sharedLedgerId) {
-              ledger.sharedLedgerId = shareId;
-            }
+            // 共享ID已在账本创建时生成，直接使用，不再重新生成
+            const shareId = ledger.sharedLedgerId;
             
             try {
-              // 复制到剪贴板
+              // 复制到剪贴板（浏览器原生API）
               await navigator.clipboard.writeText(shareId);
               showToast(`共享ID已复制到剪贴板：${shareId}`);
               
-              // 自动连接同步（保持原有功能）
+              // 自动连接同步
               await connectCurrentLedgerSync({ askUpload: false });
             } catch (err) {
               showToast(`复制失败，请手动复制：${shareId}`);
@@ -1319,6 +1337,7 @@
             }
           }
 
+          // 核心修复4：同步逻辑优化（先合并再上传）
           async function syncCurrentLedgerNow() {
             const ledger = currentLedger.value;
             if (!ledger?.sharedLedgerId) {
@@ -1330,14 +1349,20 @@
               const client = initSupabaseClient();
               if (!client) throw new Error("Supabase未初始化（密钥/URL错误）");
               
+              // 1. 先下载云端最新记录
               const cloudRecords = await fetchCloudRecords(ledger.sharedLedgerId);
+              
+              // 2. 合并本地和云端记录（保留最新修改）
               const mergedRecords = mergeRecordsByNewest(ledger.records, cloudRecords);
               ledger.records = mergedRecords;
               
+              // 3. 确保币种完整
               ensureLedgerCurrenciesFromRecords(ledger);
+              
+              // 4. 上传合并后的记录到云端
               await upsertRecordsToCloud(mergedRecords, ledger.sharedLedgerId);
               
-              showToast(`同步成功！共加载 ${cloudRecords.length} 条云端记录，本地总计 ${mergedRecords.length} 条`);
+              showToast(`同步成功！共合并 ${cloudRecords.length} 条云端记录，本地总计 ${mergedRecords.length} 条`);
             } catch (err) {
               showToast(`同步失败：${err.message}`);
               console.error("同步错误：", err);
@@ -1503,7 +1528,7 @@
                 amountOriginal: roundTo(amountInput, currencyDigits(currency)),
                 category: classify(detail),
                 ts: Date.now(),
-                updatedAt: Date.now(),
+                updatedAt: Date.now(), // 新增记录时标记更新时间
               },
             };
           }
@@ -1565,13 +1590,14 @@
               return;
             }
 
+            // 编辑记录时更新updatedAt时间戳
             ledger.records[idx] = {
               ...ledger.records[idx],
               detail,
               amountOriginal: roundTo(amount, currencyDigits(currency)),
               currency,
               category: editCategory.value || classify(detail),
-              updatedAt: Date.now(),
+              updatedAt: Date.now(), // 关键：标记修改时间
             };
             showToast("已保存");
             if (ledger.sharedLedgerId) upsertRecordsToCloud([ledger.records[idx]], ledger.sharedLedgerId);
@@ -1618,7 +1644,7 @@
                 id: ledger.id,
                 name: ledger.name,
                 selectedCurrency: ledger.selectedCurrency,
-                sharedLedgerId: ledger.sharedLedgerId || "",
+                sharedLedgerId: ledger.sharedLedgerId || "", // 导出永久共享ID
                 currencies: ledger.currencies.map((currency) => ({
                   code: currency.code,
                   name: currency.name,
@@ -1632,7 +1658,7 @@
                   amountOriginal: Number(record.amountOriginal),
                   category: record.category,
                   ts: Number(record.ts),
-                  updatedAt: Number(record.updatedAt || record.ts || Date.now()),
+                  updatedAt: Number(record.updatedAt || record.ts || Date.now()), // 保留更新时间
                 })),
                 collapsedCategories: [...(ledger.collapsedCategories || [])],
                 createdAt: Number(ledger.createdAt || Date.now()),
@@ -1670,7 +1696,7 @@
                 currencies: [],
                 records: rawRecords.map(normalizeLegacyRecord).filter(Boolean),
                 collapsedCategories: [],
-                sharedLedgerId: "",
+                sharedLedgerId: "", // 导入时自动生成永久共享ID
               },
               ledgerName
             );
@@ -1708,7 +1734,7 @@
               const map = new Map(appState.value.ledgers.map((ledger) => [ledger.id, ledger]));
               incomingLedgers.forEach((ledger) => {
                 if (map.has(ledger.id)) {
-                  ledger.id = createId("ledger");
+                  ledger.id = createId("ledger"); // 账本ID冲突时重新生成，但共享ID保留
                 }
                 map.set(ledger.id, ledger);
               });
@@ -1746,12 +1772,13 @@
               return;
             }
             
+            // 绑定到指定的共享ID（不再生成新ID）
             ledger.sharedLedgerId = shareId;
             closePasteShareId();
             
             try {
               await connectCurrentLedgerSync({ askUpload: false });
-              showToast(`已成功同步共享ID「${shareId}」的账本数据`);
+              showToast(`已成功绑定共享ID「${shareId}」并同步数据`);
             } catch (err) {
               showToast(`同步失败：${err.message}`);
               console.error("粘贴共享ID同步错误：", err);
@@ -1826,7 +1853,7 @@
             createLedger,
             renameLedgerById,
             renameCurrentLedger,
-            copyShareIdToClipboard, // 替换原来的openShareForCurrentLedger
+            copyShareIdToClipboard,
             syncCurrentLedgerNow,
             deleteLedgerById,
             openCurrencyManager,
