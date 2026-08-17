@@ -519,18 +519,19 @@
             <div class="mt-4 space-y-3 rounded-2xl bg-gray-50 p-3">
               <div>
                 <p class="text-sm font-medium text-gray-900">添加默认币种</p>
+                <p class="mt-1 text-xs text-gray-500">会合并显示系统默认币种与本机沉淀的全局自定义币种</p>
                 <div class="mt-2 flex items-center gap-2">
                   <select
                     v-model="quickAddCurrencyCode"
                     class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-300"
                   >
-                    <option value="">请选择一个默认币种</option>
+                    <option value="">请选择一个币种</option>
                     <option
-                      v-for="item in missingDefaultCurrencies"
+                      v-for="item in quickAddCurrencies"
                       :key="item.code"
                       :value="item.code"
                     >
-                      {{ item.name }}（{{ item.code }}）
+                      {{ item.name }}（{{ item.code }}）{{ item.source === 'global' ? ' · 全局自定义' : '' }}
                     </option>
                   </select>
                   <button
@@ -687,6 +688,7 @@
       createApp({
         setup() {
           const APP_STORAGE_KEY = "travel_accounting_app_v4";
+          const GLOBAL_CUSTOM_CURRENCIES_KEY = "travel_accounting_global_custom_currencies_v1";
           const LEGACY_RECORDS_KEY = "tw_travel_expenses_v1";
           const defaultRateSource = "中国银行 2026-06-15 中行折算价";
           const SUPABASE_URL_RAW = "https://uoflelgadydnsvkkrzdo.supabase.co/rest/v1/";
@@ -716,14 +718,17 @@
             { code: "MYR", name: "马币", symbol: "RM", rateToCny: 1.6754 },
             { code: "THB", name: "泰铢", symbol: "฿", rateToCny: 0.2076 },
             { code: "TWD", name: "台币", symbol: "NT$", rateToCny: 0.2143 },
+            { code: "VND", name: "越南盾", symbol: "₫", rateToCny: 0.00028 },
             { code: "JPY", name: "日元", symbol: "¥", rateToCny: 0.042424 },
             { code: "KRW", name: "韩元", symbol: "₩", rateToCny: 0.00448 },
             { code: "CAD", name: "加元", symbol: "CA$", rateToCny: 4.8525 },
             { code: "USD", name: "美元", symbol: "$", rateToCny: 6.8088 },
             { code: "EUR", name: "欧元", symbol: "€", rateToCny: 7.8686 },
           ];
+          const DEFAULT_CURRENCY_CODE_SET = new Set(DEFAULT_CURRENCIES.map((item) => item.code));
 
           const appState = ref({ version: 3, ledgers: [], lastLedgerId: null });
+          const globalCustomCurrencyPool = ref([]);
           const inputText = ref("");
           const errorMsg = ref("");
           const toast = ref("");
@@ -802,18 +807,155 @@
             return 2;
           }
 
-          function cloneCurrency(item) {
-            const code = String(item.code || "").toUpperCase();
+          function isBuiltinCurrencyCode(code) {
+            return DEFAULT_CURRENCY_CODE_SET.has(String(code || "").toUpperCase());
+          }
+
+          function extractCurrencyPatch(item, fallbackCode = "") {
+            const code = String(item?.code || fallbackCode || "").trim().toUpperCase();
+            if (!code) return null;
+            const rawName = item?.name ?? item?.currencyName ?? item?.currency_name;
+            const rawSymbol = item?.symbol ?? item?.currencySymbol ?? item?.currency_symbol;
+            const rawRateSource = item?.rateToCny ?? item?.rate_to_cny ?? item?.currencyRateToCny ?? item?.currency_rate_to_cny;
+            const parsedRate = Number(rawRateSource);
             return {
               code,
-              name: String(item.name || code),
-              symbol: String(item.symbol || code),
-              rateToCny: code === "CNY" ? 1 : Math.max(Number(item.rateToCny || 0), 0.000001),
+              name: rawName == null ? undefined : (normalizeText(rawName) || undefined),
+              symbol: rawSymbol == null ? undefined : (String(rawSymbol).trim() || undefined),
+              rateToCny:
+                code === "CNY"
+                  ? 1
+                  : rawRateSource == null
+                    ? undefined
+                    : Number.isFinite(parsedRate) && parsedRate > 0
+                      ? roundTo(parsedRate, 6)
+                      : undefined,
             };
           }
 
+          function buildCurrencyDefinition(...sources) {
+            let code = "";
+            let name;
+            let symbol;
+            let rateToCny;
+            sources.forEach((source) => {
+              const patch = extractCurrencyPatch(source, code);
+              if (!patch?.code) return;
+              code = patch.code;
+              if (patch.name && (!name || name === code || patch.name === name)) name = patch.name;
+              if (patch.symbol && (!symbol || symbol === code || patch.symbol === symbol)) symbol = patch.symbol;
+              if (patch.rateToCny != null && (rateToCny == null || rateToCny === 1 || patch.rateToCny === rateToCny)) {
+                rateToCny = patch.rateToCny;
+              }
+            });
+            if (!code) return null;
+            return {
+              code,
+              name: name || code,
+              symbol: symbol || code,
+              rateToCny: code === "CNY" ? 1 : (rateToCny != null ? rateToCny : 1),
+            };
+          }
+
+          function cloneCurrency(item) {
+            return buildCurrencyDefinition(item, { code: item?.code || "" }) || null;
+          }
+
+          function findDefaultCurrency(code) {
+            const upper = String(code || "").toUpperCase();
+            return DEFAULT_CURRENCIES.find((item) => item.code === upper) || null;
+          }
+
+          function findGlobalCustomCurrency(code) {
+            const upper = String(code || "").toUpperCase();
+            return globalCustomCurrencyPool.value.find((item) => item.code === upper) || null;
+          }
+
+          function resolveCurrencyDefinition(code, ...extraSources) {
+            const upper = String(code || "").toUpperCase();
+            if (!upper) return null;
+            return buildCurrencyDefinition(
+              findDefaultCurrency(upper),
+              findGlobalCustomCurrency(upper),
+              ...extraSources,
+              { code: upper }
+            );
+          }
+
+          function normalizeGlobalCustomCurrencyPool(list) {
+            const map = new Map();
+            (Array.isArray(list) ? list : []).forEach((item) => {
+              const currency = buildCurrencyDefinition(item, { code: item?.code || "" });
+              if (!currency || isBuiltinCurrencyCode(currency.code) || currency.code === "CNY") return;
+              const merged = buildCurrencyDefinition(map.get(currency.code), currency);
+              map.set(currency.code, merged);
+            });
+            return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+          }
+
+          function persistGlobalCustomCurrencyPool() {
+            localStorage.setItem(GLOBAL_CUSTOM_CURRENCIES_KEY, JSON.stringify(globalCustomCurrencyPool.value));
+          }
+
+          function loadGlobalCustomCurrencyPool() {
+            const raw = localStorage.getItem(GLOBAL_CUSTOM_CURRENCIES_KEY);
+            const parsed = raw ? safeParseJSON(raw) : null;
+            globalCustomCurrencyPool.value = normalizeGlobalCustomCurrencyPool(parsed);
+          }
+
+          function upsertGlobalCustomCurrency(currencyLike) {
+            const currency = buildCurrencyDefinition(currencyLike, { code: currencyLike?.code || currencyLike || "" });
+            if (!currency || isBuiltinCurrencyCode(currency.code) || currency.code === "CNY") return currency;
+            const nextPool = [...globalCustomCurrencyPool.value];
+            const idx = nextPool.findIndex((item) => item.code === currency.code);
+            if (idx >= 0) nextPool[idx] = buildCurrencyDefinition(nextPool[idx], currency);
+            else nextPool.push(currency);
+            globalCustomCurrencyPool.value = normalizeGlobalCustomCurrencyPool(nextPool);
+            persistGlobalCustomCurrencyPool();
+            return currency;
+          }
+
+          function upsertGlobalCustomCurrencies(list) {
+            let changed = false;
+            const nextPool = [...globalCustomCurrencyPool.value];
+            (Array.isArray(list) ? list : []).forEach((item) => {
+              const currency = buildCurrencyDefinition(item, { code: item?.code || item || "" });
+              if (!currency || isBuiltinCurrencyCode(currency.code) || currency.code === "CNY") return;
+              const idx = nextPool.findIndex((existing) => existing.code === currency.code);
+              if (idx >= 0) nextPool[idx] = buildCurrencyDefinition(nextPool[idx], currency);
+              else nextPool.push(currency);
+              changed = true;
+            });
+            if (!changed) return;
+            globalCustomCurrencyPool.value = normalizeGlobalCustomCurrencyPool(nextPool);
+            persistGlobalCustomCurrencyPool();
+          }
+
+          function syncGlobalPoolFromLedgers(ledgers = appState.value.ledgers) {
+            const collected = [];
+            (Array.isArray(ledgers) ? ledgers : []).forEach((ledger) => {
+              (ledger?.currencies || []).forEach((currency) => collected.push(currency));
+              (ledger?.records || []).forEach((record) => {
+                if (record?.currencyMeta) collected.push(record.currencyMeta);
+              });
+            });
+            upsertGlobalCustomCurrencies(collected);
+          }
+
+          function upsertCurrencyInList(list, code, ...extraSources) {
+            const upper = String(code || "").toUpperCase();
+            if (!upper || !Array.isArray(list)) return null;
+            const idx = list.findIndex((item) => item.code === upper);
+            const existing = idx >= 0 ? list[idx] : null;
+            const resolved = resolveCurrencyDefinition(upper, existing, ...extraSources);
+            if (!resolved) return null;
+            if (idx >= 0) list[idx] = resolved;
+            else list.push(resolved);
+            return resolved;
+          }
+
           function buildDefaultCurrencies() {
-            return DEFAULT_CURRENCIES.map(cloneCurrency);
+            return DEFAULT_CURRENCIES.map(cloneCurrency).filter(Boolean);
           }
 
           function buildStarterCurrencies() {
@@ -867,6 +1009,25 @@
             const currency = String(item.currency || "CNY").toUpperCase();
             const amountOriginal = Number(item.amountOriginal ?? item.amount ?? item.amountTwd ?? 0);
             if (!Number.isFinite(amountOriginal) || amountOriginal <= 0) return null;
+            const rawCurrencyMeta =
+              item.currencyMeta && typeof item.currencyMeta === "object"
+                ? item.currencyMeta
+                : item.currency_meta && typeof item.currency_meta === "object"
+                  ? item.currency_meta
+                  : null;
+            const currencyMeta =
+              rawCurrencyMeta || item.currencyName != null || item.currencySymbol != null || item.currencyRateToCny != null
+                ? buildCurrencyDefinition(
+                    { code: currency },
+                    rawCurrencyMeta || {},
+                    {
+                      code: currency,
+                      name: item.currencyName,
+                      symbol: item.currencySymbol,
+                      rateToCny: item.currencyRateToCny,
+                    }
+                  )
+                : null;
             return {
               id: item.id || createId("record"),
               detail: String(item.detail || "未命名消费"),
@@ -876,6 +1037,7 @@
               ts: Number(item.ts || item.createdAt || Date.now()),
               updatedAt: Number(item.updatedAt || item.ts || item.createdAt || Date.now()),
               isDeleted: Boolean(item.isDeleted || false), // 新增：删除标记
+              currencyMeta,
             };
           }
 
@@ -906,10 +1068,7 @@
               : [];
 
             records.forEach((record) => {
-              if (!uniqueCurrencies.some((item) => item.code === record.currency)) {
-                const builtin = DEFAULT_CURRENCIES.find((item) => item.code === record.currency);
-                uniqueCurrencies.push(cloneCurrency(builtin || { code: record.currency, name: record.currency, symbol: record.currency, rateToCny: 1 }));
-              }
+              upsertCurrencyInList(uniqueCurrencies, record.currency, record.currencyMeta);
             });
 
             const collapsedCategories = Array.isArray(ledger?.collapsedCategories)
@@ -947,13 +1106,15 @@
 
           function loadInitialState() {
             const raw = localStorage.getItem(APP_STORAGE_KEY);
+            loadGlobalCustomCurrencyPool();
             const parsed = raw ? safeParseJSON(raw) : null;
             if (parsed && Array.isArray(parsed.ledgers) && parsed.ledgers.length) {
               appState.value = {
-                version: 4,
+                version: 5,
                 ledgers: parsed.ledgers.map((ledger) => normalizeLedger(ledger)), // 确保旧账本也有永久共享ID
                 lastLedgerId: parsed.lastLedgerId || parsed.ledgers[0]?.id || null,
               };
+              syncGlobalPoolFromLedgers(appState.value.ledgers);
               return;
             }
 
@@ -962,12 +1123,14 @@
             if (Array.isArray(legacyParsed) && legacyParsed.length) {
               const migrated = createLedgerObject("台湾旅行记账小助手");
               migrated.records = legacyParsed.map(normalizeLegacyRecord).filter(Boolean);
-              appState.value = { version: 4, ledgers: [migrated], lastLedgerId: migrated.id };
+              ensureLedgerCurrenciesFromRecords(migrated);
+              appState.value = { version: 5, ledgers: [migrated], lastLedgerId: migrated.id };
+              syncGlobalPoolFromLedgers(appState.value.ledgers);
               return;
             }
 
             const first = createLedgerObject("台湾旅行记账小助手");
-            appState.value = { version: 4, ledgers: [first], lastLedgerId: first.id };
+            appState.value = { version: 5, ledgers: [first], lastLedgerId: first.id };
           }
 
           function persistAppState() {
@@ -983,7 +1146,14 @@
             const ledger = currentLedger.value;
             const fallback = cloneCurrency(DEFAULT_CURRENCIES[0]);
             if (!ledger) return fallback;
-            return ledger.currencies.find((item) => item.code === ledger.selectedCurrency) || ledger.currencies[0] || fallback;
+            return (
+              resolveCurrencyDefinition(
+                ledger.selectedCurrency,
+                ledger.currencies.find((item) => item.code === ledger.selectedCurrency)
+              ) ||
+              ledger.currencies[0] ||
+              fallback
+            );
           });
 
           const sortedCurrentCurrencies = computed(() => {
@@ -999,11 +1169,18 @@
             });
           });
 
-          const missingDefaultCurrencies = computed(() => {
+          const quickAddCurrencies = computed(() => {
             const ledger = currentLedger.value;
             if (!ledger) return [];
             const existing = new Set(ledger.currencies.map((item) => item.code));
-            return DEFAULT_CURRENCIES.filter((item) => !existing.has(item.code));
+            const defaults = DEFAULT_CURRENCIES.map((item) => ({ ...cloneCurrency(item), source: "default" }));
+            const globals = globalCustomCurrencyPool.value.map((item) => ({ ...cloneCurrency(item), source: "global" }));
+            return [...defaults, ...globals]
+              .filter((item) => item && !existing.has(item.code))
+              .sort((a, b) => {
+                if (a.source !== b.source) return a.source === "default" ? -1 : 1;
+                return a.code.localeCompare(b.code);
+              });
           });
 
           function currencySymbol(code) {
@@ -1011,8 +1188,7 @@
             const ledger = currentLedger.value;
             const found = ledger?.currencies.find((item) => item.code === upper);
             if (found?.symbol) return found.symbol;
-            const builtin = DEFAULT_CURRENCIES.find((item) => item.code === upper);
-            return builtin?.symbol || upper;
+            return resolveCurrencyDefinition(upper)?.symbol || upper;
           }
 
           function getRateToCny(code) {
@@ -1020,7 +1196,8 @@
             if (upper === "CNY") return 1;
             const ledger = currentLedger.value;
             const found = ledger?.currencies.find((item) => item.code === upper);
-            return Number(found?.rateToCny || 1);
+            if (Number.isFinite(Number(found?.rateToCny)) && Number(found.rateToCny) > 0) return Number(found.rateToCny);
+            return Number(resolveCurrencyDefinition(upper)?.rateToCny || 1);
           }
 
           function convertToCny(amount, code) {
@@ -1037,26 +1214,18 @@
             return convertToCny(record.amountOriginal, record.currency);
           }
 
-          function ensureLedgerHasCurrency(ledger, code) {
+          function ensureLedgerHasCurrency(ledger, code, preferredCurrency = null) {
             if (!ledger || !code) return;
             const upper = String(code).toUpperCase();
-            if (ledger.currencies.some((item) => item.code === upper)) return;
-            const builtin = DEFAULT_CURRENCIES.find((item) => item.code === upper);
-            ledger.currencies.push(
-              cloneCurrency(
-                builtin || {
-                  code: upper,
-                  name: upper,
-                  symbol: upper,
-                  rateToCny: 1,
-                }
-              )
-            );
+            const resolved = upsertCurrencyInList(ledger.currencies, upper, preferredCurrency);
+            if (resolved && !isBuiltinCurrencyCode(resolved.code) && resolved.code !== "CNY") {
+              upsertGlobalCustomCurrency(resolved);
+            }
           }
 
           function ensureLedgerCurrenciesFromRecords(ledger) {
             if (!ledger) return;
-            (ledger.records || []).forEach((record) => ensureLedgerHasCurrency(ledger, record.currency));
+            (ledger.records || []).forEach((record) => ensureLedgerHasCurrency(ledger, record.currency, record.currencyMeta));
           }
 
           // 核心修复2：完善的合并逻辑（处理删除标记+时间戳优先级）
@@ -1112,7 +1281,22 @@
               ts: row.ts,
               updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : row.ts,
               isDeleted: Boolean(row.is_deleted || false), // 新增：映射云端删除标记
+              currencyMeta: row.currency_meta,
             });
+          }
+
+          function buildRecordCurrencyMeta(record, ledger = currentLedger.value) {
+            const code = String(record?.currency || "CNY").toUpperCase();
+            const ledgerCurrency = ledger?.currencies?.find((item) => item.code === code) || null;
+            const resolved = resolveCurrencyDefinition(code, record?.currencyMeta, ledgerCurrency);
+            return resolved
+              ? {
+                  code: resolved.code,
+                  name: resolved.name,
+                  symbol: resolved.symbol,
+                  rateToCny: Number(resolved.rateToCny),
+                }
+              : null;
           }
 
           async function fetchCloudRecords(sharedId = currentSharedLedgerId()) {
@@ -1126,7 +1310,7 @@
             try {
               const { data, error } = await client
                 .from("expense_records")
-                .select("id, detail, currency, amount_original, category, ts, updated_at, is_deleted") // 新增：查询删除标记
+                .select("id, detail, currency, amount_original, category, ts, updated_at, is_deleted, currency_meta") // 新增：查询删除标记和币种冗余信息
                 .eq("ledger_id", sharedId)
                 .order("ts", { ascending: false })
                 .limit(5000);
@@ -1147,6 +1331,7 @@
             if (!sharedId || !records?.length) return;
             const client = initSupabaseClient();
             if (!client) return;
+            const ledger = currentLedger.value;
             const rows = records.map((item) => ({
               id: item.id,
               ledger_id: sharedId,
@@ -1157,6 +1342,7 @@
               ts: Number(item.ts || Date.now()),
               updated_at: new Date(Number(item.updatedAt || Date.now())).toISOString(),
               is_deleted: Boolean(item.isDeleted || false), // 新增：上传删除标记
+              currency_meta: buildRecordCurrencyMeta(item, ledger),
             }));
             const { error } = await client.from("expense_records").upsert(rows, { onConflict: "id" });
             if (error) showToast(`云端写入失败：${error.message}`);
@@ -1200,7 +1386,7 @@
           function applyRemoteUpsertToCurrentLedger(record) {
             const ledger = currentLedger.value;
             if (!ledger || !record?.id) return;
-            ensureLedgerHasCurrency(ledger, record.currency);
+            ensureLedgerHasCurrency(ledger, record.currency, record.currencyMeta);
             const idx = ledger.records.findIndex((item) => item.id === record.id);
             if (idx === -1) {
               // 新增记录：如果是已删除则跳过
@@ -1265,6 +1451,7 @@
             ledger.records = mergeRecordsByNewest(localRecords, cloudRecords);
 
             ensureLedgerCurrenciesFromRecords(ledger);
+            syncGlobalPoolFromLedgers([ledger]);
             subscribeRealtimeForCurrentLedger(sharedId);
           }
 
@@ -1445,6 +1632,7 @@
             const item = currentLedger.value.currencies.find((c) => c.code === code);
             if (!item) return;
             item[field] = String(value || "").trim() || item[field];
+            if (!isBuiltinCurrencyCode(code) && code !== "CNY") upsertGlobalCustomCurrency(item);
           }
 
           function updateCurrencyRate(code, value) {
@@ -1458,16 +1646,18 @@
             const num = Number(value);
             if (!Number.isFinite(num) || num <= 0) return;
             item.rateToCny = roundTo(num, 6);
+            if (!isBuiltinCurrencyCode(code) && code !== "CNY") upsertGlobalCustomCurrency(item);
           }
 
           function addDefaultCurrency() {
             if (!currentLedger.value || !quickAddCurrencyCode.value) return;
-            const tpl = DEFAULT_CURRENCIES.find((item) => item.code === quickAddCurrencyCode.value);
+            const tpl = quickAddCurrencies.value.find((item) => item.code === quickAddCurrencyCode.value);
             if (!tpl) return;
             if (currentLedger.value.currencies.some((item) => item.code === tpl.code)) return;
             currentLedger.value.currencies.push(cloneCurrency(tpl));
             quickAddCurrencyCode.value = "";
-            showToast("已添加默认币种");
+            if (!isBuiltinCurrencyCode(tpl.code) && tpl.code !== "CNY") upsertGlobalCustomCurrency(tpl);
+            showToast("已添加币种");
           }
 
           function addCustomCurrency() {
@@ -1494,12 +1684,14 @@
               return;
             }
 
-            currentLedger.value.currencies.push({
+            const customCurrency = {
               code,
               name,
               symbol,
               rateToCny: code === "CNY" ? 1 : roundTo(rate, 6),
-            });
+            };
+            currentLedger.value.currencies.push(customCurrency);
+            upsertGlobalCustomCurrency(customCurrency);
             newCurrencyCode.value = "";
             newCurrencyName.value = "";
             newCurrencySymbol.value = "";
@@ -1695,10 +1887,16 @@
           function buildExportPayload() {
             return {
               app: "旅行记账小助手",
-              version: 4,
+              version: 5,
               exportedAt: new Date().toISOString(),
               rateBase: "CNY",
               rateSource: defaultRateSource,
+              globalCustomCurrencies: globalCustomCurrencyPool.value.map((currency) => ({
+                code: currency.code,
+                name: currency.name,
+                symbol: currency.symbol,
+                rateToCny: Number(currency.rateToCny),
+              })),
               ledgers: appState.value.ledgers.map((ledger) => ({
                 id: ledger.id,
                 name: ledger.name,
@@ -1716,6 +1914,7 @@
                   currency: record.currency,
                   amountOriginal: Number(record.amountOriginal),
                   category: record.category,
+                  currencyMeta: buildRecordCurrencyMeta(record, ledger),
                   ts: Number(record.ts),
                   updatedAt: Number(record.updatedAt || record.ts || Date.now()), // 保留更新时间
                   isDeleted: Boolean(record.isDeleted || false), // 导出删除标记
@@ -1775,6 +1974,9 @@
               }
 
               let incomingLedgers = [];
+              if (Array.isArray(parsed?.globalCustomCurrencies)) {
+                upsertGlobalCustomCurrencies(parsed.globalCustomCurrencies);
+              }
               if (Array.isArray(parsed?.ledgers)) {
                 incomingLedgers = parsed.ledgers.map((ledger) => normalizeLedger(ledger, ledger?.name || "导入的账本"));
               } else if (Array.isArray(parsed?.records)) {
@@ -1800,6 +2002,7 @@
               });
 
               appState.value.ledgers = Array.from(map.values());
+              syncGlobalPoolFromLedgers(appState.value.ledgers);
               if (!currentLedger.value && appState.value.ledgers[0]) {
                 appState.value.lastLedgerId = appState.value.ledgers[0].id;
               }
@@ -1852,6 +2055,7 @@
                 appState.value.lastLedgerId = appState.value.ledgers[0].id;
               }
               persistAppState();
+              syncGlobalPoolFromLedgers(appState.value.ledgers);
             },
             { deep: true }
           );
@@ -1879,7 +2083,7 @@
             currentLedger,
             selectedCurrencyMeta,
             sortedCurrentCurrencies,
-            missingDefaultCurrencies,
+            quickAddCurrencies,
             inputText,
             errorMsg,
             toast,
