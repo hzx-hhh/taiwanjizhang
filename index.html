@@ -70,7 +70,10 @@
         </div>
       </div>
 
-      <header class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur">
+      <header
+        ref="pageHeaderRef"
+        class="sticky top-0 z-20 border-b border-gray-200 bg-gray-100/85 backdrop-blur"
+      >
         <div class="mx-auto max-w-md px-4 py-3">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -255,22 +258,34 @@
         </section>
 
         <section class="mt-4">
-          <div class="mb-2 px-1">
-            <h2 class="text-sm font-semibold text-gray-800">分类明细</h2>
-            <p class="mt-0.5 text-xs text-gray-500">
-              分类金额统一按人民币汇总，单条记录保留原始币种
-            </p>
+          <div class="mb-2 flex items-end justify-between gap-3 px-1">
+            <div>
+              <h2 class="text-sm font-semibold text-gray-800">分类明细</h2>
+              <p class="mt-0.5 text-xs text-gray-500">
+                分类金额统一按人民币汇总，单条记录保留原始币种
+              </p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-600 shadow-sm active:opacity-80"
+              @click="toggleAllCategories"
+            >
+              {{ hasExpandedCategory ? "全部收起" : "全部展开" }}
+            </button>
           </div>
 
           <div class="space-y-3">
             <div
               v-for="cat in categories"
               :key="cat.key"
-              class="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5"
+              :id="`category-card-${cat.key}`"
+              class="rounded-2xl bg-white shadow-sm ring-1 ring-black/5"
             >
               <button
                 type="button"
-                class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left active:bg-gray-50"
+                class="sticky z-10 flex w-full items-center justify-between gap-3 rounded-2xl bg-white px-4 py-3 text-left active:bg-gray-50"
+                :class="isCategoryExpanded(cat.key) ? 'border-b border-gray-100' : ''"
+                :style="{ top: stickyHeaderTop }"
                 @click="toggleCategory(cat.key)"
               >
                 <div class="flex items-center gap-2">
@@ -292,7 +307,7 @@
                 </div>
               </button>
 
-              <div v-if="isCategoryExpanded(cat.key)" class="border-t border-gray-100">
+              <div v-if="isCategoryExpanded(cat.key)">
                 <div v-if="(grouped[cat.key]?.items?.length ?? 0) === 0" class="px-4 py-3 text-xs text-gray-500">
                   暂无记录
                 </div>
@@ -317,6 +332,13 @@
                       <div class="mt-2 flex justify-end gap-2">
                         <button
                           type="button"
+                          class="rounded-lg bg-gray-900 px-2 py-1 text-xs font-medium text-white hover:bg-gray-800 active:opacity-80"
+                          @click.stop="duplicateRecord(item)"
+                        >
+                          复制
+                        </button>
+                        <button
+                          type="button"
                           class="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 active:opacity-80"
                           @click.stop="openEdit(item)"
                         >
@@ -333,6 +355,15 @@
                     </div>
                   </li>
                 </ul>
+                <div class="border-t border-gray-100 px-4 py-2">
+                  <button
+                    type="button"
+                    class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 active:opacity-80"
+                    @click="collapseCategoryAndScroll(cat.key)"
+                  >
+                    收起「{{ cat.label }}」
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -658,6 +689,27 @@
                 </select>
               </div>
 
+              <div>
+                <div class="flex items-center justify-between gap-2">
+                  <label class="text-xs text-gray-600">记录时间</label>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-gray-600 active:opacity-80"
+                    @click="setEditTsNow"
+                  >
+                    设为现在
+                  </button>
+                </div>
+                <input
+                  v-model="editTs"
+                  type="datetime-local"
+                  class="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-gray-300 focus:bg-white"
+                />
+                <p class="mt-1 text-[11px] text-gray-500">
+                  补记录时可直接改成过去的日期与时间
+                </p>
+              </div>
+
               <p v-if="editError" class="text-xs text-red-600">{{ editError }}</p>
 
               <div class="flex items-center justify-end gap-2 pt-1">
@@ -750,11 +802,16 @@
           const editAmount = ref("");
           const editCurrency = ref("CNY");
           const editCategory = ref("other");
+          const editTs = ref("");
           const editError = ref("");
           const cloudReady = ref(false);
           const cloudError = ref("");
           let supabaseClient = null;
           let realtimeChannel = null;
+
+          // 页面顶部固定头部高度（用于分类标题吸顶与收起后回滚定位）
+          const pageHeaderRef = ref(null);
+          const headerHeight = ref(0);
 
           // 粘贴共享ID相关
           const showPasteShareIdSheet = ref(false);
@@ -1498,6 +1555,26 @@
             return `${mm}/${dd} ${hh}:${mi}`;
           }
 
+          // 时间戳 <-> datetime-local 输入框（按本机时区转换）
+          function toDatetimeLocalValue(ts) {
+            const parsed = Number(ts);
+            const date = new Date(Number.isFinite(parsed) && parsed > 0 ? parsed : Date.now());
+            const pad = (n) => String(n).padStart(2, "0");
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+          }
+
+          function parseDatetimeLocalValue(value) {
+            const text = String(value || "").trim();
+            if (!text) return null;
+            const ts = new Date(text).getTime();
+            return Number.isFinite(ts) ? ts : null;
+          }
+
+          function sortRecordsByTsDesc(ledger) {
+            if (!ledger || !Array.isArray(ledger.records)) return;
+            ledger.records.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+          }
+
           function openLedgerPicker() {
             showLedgerSheet.value = true;
           }
@@ -1723,14 +1800,44 @@
             return !(ledger.collapsedCategories || []).includes(key);
           }
 
-          function toggleCategory(key) {
+          // 分类吸顶位置：贴在页面顶部固定头部下方
+          const stickyHeaderTop = computed(() => `${Math.max(Number(headerHeight.value) || 0, 0)}px`);
+
+          const hasExpandedCategory = computed(() =>
+            categories.some((cat) => isCategoryExpanded(cat.key))
+          );
+
+          function setCategoryExpanded(key, expanded) {
             const ledger = currentLedger.value;
             if (!ledger) return;
-            const list = Array.isArray(ledger.collapsedCategories) ? [...ledger.collapsedCategories] : [];
-            const idx = list.indexOf(key);
-            if (idx >= 0) list.splice(idx, 1);
-            else list.push(key);
-            ledger.collapsedCategories = list;
+            const list = new Set(Array.isArray(ledger.collapsedCategories) ? ledger.collapsedCategories : []);
+            if (expanded) list.delete(key);
+            else list.add(key);
+            ledger.collapsedCategories = Array.from(list);
+          }
+
+          function toggleCategory(key) {
+            setCategoryExpanded(key, !isCategoryExpanded(key));
+          }
+
+          // 在列表底部收起后，把该分类卡片滚回视野，避免“收起后不知道自己在哪”
+          function collapseCategoryAndScroll(key) {
+            setCategoryExpanded(key, false);
+            nextTick(() => {
+              const el = document.getElementById(`category-card-${key}`);
+              if (!el) return;
+              const top = el.getBoundingClientRect().top + window.scrollY - (Number(headerHeight.value) || 0) - 8;
+              window.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
+            });
+          }
+
+          function toggleAllCategories() {
+            const ledger = currentLedger.value;
+            if (!ledger) return;
+            const anyExpanded = categories.some((cat) => isCategoryExpanded(cat.key));
+            ledger.collapsedCategories = anyExpanded ? categories.map((cat) => cat.key) : [];
+            showToast(anyExpanded ? "已全部收起" : "已全部展开");
+            if (anyExpanded) window.scrollTo({ top: 0, behavior: "smooth" });
           }
 
           function parseSmartInput(raw, currency) {
@@ -1778,6 +1885,28 @@
             if (ledger.sharedLedgerId) upsertRecordsToCloud([parsed.data], ledger.sharedLedgerId);
           }
 
+          // 一键复制：除时间外（内容、金额、币种、分类）全部与原来一致
+          function duplicateRecord(item) {
+            const ledger = currentLedger.value;
+            if (!ledger || !item) return;
+            const now = Date.now();
+            const copy = {
+              ...item,
+              id: createId("record"),
+              ts: now,
+              updatedAt: now,
+              isDeleted: false,
+            };
+            ledger.records.unshift(copy);
+            sortRecordsByTsDesc(ledger);
+            showToast(`已复制「${copy.detail}」`);
+            if (ledger.sharedLedgerId) upsertRecordsToCloud([copy], ledger.sharedLedgerId);
+          }
+
+          function setEditTsNow() {
+            editTs.value = toDatetimeLocalValue(Date.now());
+          }
+
           function openEdit(item) {
             editError.value = "";
             editingId.value = item.id;
@@ -1785,6 +1914,7 @@
             editAmount.value = String(item.amountOriginal ?? "");
             editCurrency.value = item.currency || "CNY";
             editCategory.value = item.category || "other";
+            editTs.value = toDatetimeLocalValue(item.ts);
             editOpen.value = true;
           }
 
@@ -1812,6 +1942,12 @@
               return;
             }
 
+            const ts = parseDatetimeLocalValue(editTs.value);
+            if (ts == null) {
+              editError.value = "请选择有效的记录时间。";
+              return;
+            }
+
             const idx = ledger.records.findIndex((item) => item.id === editingId.value);
             if (idx === -1) {
               closeEdit();
@@ -1825,11 +1961,17 @@
               amountOriginal: roundTo(amount, currencyDigits(currency)),
               currency,
               category: editCategory.value || classify(detail),
+              ts, // 支持把记录时间改成过去的任意时间（补记录）
               updatedAt: Date.now(), // 关键：标记修改时间
               isDeleted: false, // 确保编辑后取消删除标记
             };
+            // 改过时间后，列表仍然按时间倒序排列
+            sortRecordsByTsDesc(ledger);
             showToast("已保存");
-            if (ledger.sharedLedgerId) upsertRecordsToCloud([ledger.records[idx]], ledger.sharedLedgerId);
+            if (ledger.sharedLedgerId) {
+              const saved = ledger.records.find((item) => item.id === editingId.value);
+              if (saved) upsertRecordsToCloud([saved], ledger.sharedLedgerId);
+            }
             closeEdit();
           }
 
@@ -2074,6 +2216,17 @@
             if (appState.value.ledgers.length > 1) {
               showLedgerSheet.value = true;
             }
+
+            const measureHeader = () => {
+              headerHeight.value = pageHeaderRef.value?.offsetHeight || 0;
+            };
+            measureHeader();
+            if (typeof ResizeObserver !== "undefined" && pageHeaderRef.value) {
+              const observer = new ResizeObserver(measureHeader);
+              observer.observe(pageHeaderRef.value);
+            } else {
+              window.addEventListener("resize", measureHeader);
+            }
           });
 
           return {
@@ -2101,7 +2254,11 @@
             editAmount,
             editCurrency,
             editCategory,
+            editTs,
             editError,
+            pageHeaderRef,
+            stickyHeaderTop,
+            hasExpandedCategory,
             totalCny,
             totalInSelectedCurrency,
             grouped,
@@ -2130,8 +2287,12 @@
             removeCurrency,
             isCategoryExpanded,
             toggleCategory,
+            collapseCategoryAndScroll,
+            toggleAllCategories,
             addFromInput,
+            duplicateRecord,
             openEdit,
+            setEditTsNow,
             closeEdit,
             saveEdit,
             removeRecord,
